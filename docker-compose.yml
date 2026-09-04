@@ -1,0 +1,104 @@
+name: seatlock
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    container_name: seatlock-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: seatlock
+      POSTGRES_PASSWORD: seatlock
+      POSTGRES_DB: seatlock
+    ports:
+      - '5433:5432'
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U seatlock -d seatlock']
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    container_name: seatlock-redis
+    restart: unless-stopped
+    command: ['redis-server', '--appendonly', 'yes']
+    ports:
+      - '6380:6379'
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  rabbitmq:
+    image: rabbitmq:4-management-alpine
+    container_name: seatlock-rabbitmq
+    restart: unless-stopped
+    environment:
+      RABBITMQ_DEFAULT_USER: seatlock
+      RABBITMQ_DEFAULT_PASS: seatlock
+    ports:
+      - '5673:5672'
+      - '15673:15672'
+    volumes:
+      - rabbitdata:/var/lib/rabbitmq
+    healthcheck:
+      test: ['CMD', 'rabbitmq-diagnostics', '-q', 'ping']
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  mongo:
+    image: mongo:8
+    container_name: seatlock-mongo
+    restart: unless-stopped
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: seatlock
+      MONGO_INITDB_ROOT_PASSWORD: seatlock
+    ports:
+      - '27018:27017'
+    volumes:
+      - mongodata:/data/db
+    healthcheck:
+      test: ['CMD', 'mongosh', '--quiet', '--eval', "db.adminCommand('ping').ok"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  minio:
+    image: minio/minio:latest
+    container_name: seatlock-minio
+    restart: unless-stopped
+    command: ['server', '/data', '--console-address', ':9001']
+    environment:
+      MINIO_ROOT_USER: seatlock
+      MINIO_ROOT_PASSWORD: seatlock123
+    ports:
+      - '9100:9000'
+      - '9101:9001'
+    volumes:
+      - miniodata:/data
+    healthcheck:
+      test: ['CMD', 'mc', 'ready', 'local']
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  mailpit:
+    image: axllent/mailpit:latest
+    container_name: seatlock-mailpit
+    restart: unless-stopped
+    ports:
+      - '1026:1025'
+      - '8026:8025'
+
+volumes:
+  pgdata:
+  redisdata:
+  rabbitdata:
+  mongodata:
+  miniodata:

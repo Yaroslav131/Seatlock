@@ -1,0 +1,44 @@
+{
+  "name": "seatlock",
+  "version": "0.0.0",
+  "private": true,
+  "packageManager": "pnpm@11.25.0",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "dev": "turbo run dev",
+    "build": "turbo run build",
+    "lint": "turbo run lint",
+    "typecheck": "turbo run typecheck",
+    "test": "turbo run test",
+    "format": "prettier --write \"**/*.{ts,js,mjs,json,md,yml,yaml}\"",
+    "format:check": "prettier --check \"**/*.{ts,js,mjs,json,md,yml,yaml}\"",
+    "infra:up": "docker compose up -d",
+    "infra:down": "docker compose down",
+    "infra:reset": "docker compose down -v",
+    "infra:logs": "docker compose logs -f",
+    "prepare": "husky"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "eslint": "^10.9.1",
+    "eslint-config-prettier": "^10.1.8",
+    "globals": "^17.12.0",
+    "husky": "^9.1.7",
+    "lint-staged": "^17.4.1",
+    "prettier": "^3.4.2",
+    "turbo": "^2.3.3",
+    "typescript": "^5.7.2",
+    "typescript-eslint": "^8.69.0"
+  },
+  "lint-staged": {
+    "*.{ts,js,mjs}": [
+      "eslint --fix",
+      "prettier --write"
+    ],
+    "*.{json,md,yml,yaml}": [
+      "prettier --write"
+    ]
+  }
+}

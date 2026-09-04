@@ -1,0 +1,47 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# Новый пуш в ту же ветку отменяет предыдущий прогон —
+# незачем занимать раннеры проверкой устаревшего кода.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: Линтер, типы, сборка
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # Версия pnpm берётся из поля packageManager в package.json —
+      # локально и в CI работает ровно одна и та же.
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      # --frozen-lockfile: если lock-файл разошёлся с package.json,
+      # сборка падает вместо того, чтобы тихо поставить другие версии.
+      - name: Установка зависимостей
+        run: pnpm install --frozen-lockfile
+
+      - name: Форматирование
+        run: pnpm format:check
+
+      - name: Линтер
+        run: pnpm lint
+
+      - name: Проверка типов
+        run: pnpm typecheck
+
+      - name: Сборка
+        run: pnpm build
