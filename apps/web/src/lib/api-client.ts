@@ -29,8 +29,12 @@ let refreshInFlight: Promise<boolean> | null = null;
  * Обменивает refresh-cookie на новый access-токен. Дедуплицирует
  * параллельные вызовы: если несколько запросов одновременно поймали
  * 401, обновление сессии должно произойти один раз, а не N раз подряд.
+ *
+ * Экспортирована: её же вызывает App при старте приложения, чтобы
+ * тихо восстановить сессию после перезагрузки страницы — cookie
+ * переживает reload, а access-токен в памяти нет.
  */
-function refreshAccessToken(): Promise<boolean> {
+export function refreshAccessToken(): Promise<boolean> {
   if (!refreshInFlight) {
     refreshInFlight = rawFetch('/api/auth/refresh', { method: 'POST' })
       .then(async (res) => {
