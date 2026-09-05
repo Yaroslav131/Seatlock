@@ -48,6 +48,16 @@ export class EventsController {
     return this.events.findPublished();
   }
 
+  @ApiOperation({ summary: 'Свои события в любом статусе (организатор/админ)' })
+  @ApiBearerAuth()
+  @ApiResponse({ status: 200, type: [EventResponseDto] })
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('ORGANIZER', 'ADMIN')
+  @Get('mine')
+  findMine(@CurrentUser() user: AuthenticatedUser): Promise<EventResponseDto[]> {
+    return this.events.findMine(user.sub);
+  }
+
   @ApiOperation({ summary: 'Событие по id — публично, с кэшем' })
   @ApiResponse({ status: 200, type: EventResponseDto })
   @ApiResponse({ status: 404, description: 'Событие не найдено' })

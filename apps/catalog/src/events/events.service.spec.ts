@@ -107,6 +107,20 @@ describe('EventsService', () => {
     });
   });
 
+  describe('findMine', () => {
+    it('фильтрует по organizerId, а не отдаёт вообще всё', async () => {
+      prisma.event.findMany.mockResolvedValue([{ id: 'e1', organizerId: 'organizer-1' }]);
+
+      const events = await service.findMine('organizer-1');
+
+      expect(prisma.event.findMany).toHaveBeenCalledWith({
+        where: { organizerId: 'organizer-1' },
+        orderBy: { createdAt: 'desc' },
+      });
+      expect(events).toEqual([{ id: 'e1', organizerId: 'organizer-1' }]);
+    });
+  });
+
   describe('findPublished', () => {
     it('отдаёт из кэша, не трогая базу, если кэш есть', async () => {
       redis.get.mockResolvedValue(JSON.stringify([{ id: 'e1' }]));

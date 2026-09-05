@@ -32,6 +32,13 @@ export class VenuesController {
     return this.venues.create(dto);
   }
 
+  @ApiOperation({ summary: 'Список залов — публично' })
+  @ApiResponse({ status: 200, type: [VenueResponseDto] })
+  @Get()
+  findAll(): Promise<VenueResponseDto[]> {
+    return this.venues.findAll();
+  }
+
   @ApiOperation({ summary: 'Зал по id — публично' })
   @ApiResponse({ status: 200, type: VenueResponseDto })
   @ApiResponse({ status: 404, description: 'Зал не найден' })
