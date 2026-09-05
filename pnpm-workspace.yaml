@@ -1,3 +1,9 @@
 packages:
   - 'apps/*'
   - 'packages/*'
+allowBuilds:
+  # Скрипт установки Prisma скачивает бинарник query-движка —
+  # без него генерация клиента и миграции не работают.
+  '@prisma/client': true
+  '@prisma/engines': true
+  prisma: true
