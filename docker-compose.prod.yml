@@ -30,6 +30,25 @@ services:
       timeout: 3s
       retries: 10
 
+  auth:
+    image: ghcr.io/yaroslav131/seatlock-auth:latest
+    build:
+      context: .
+      dockerfile: apps/auth/Dockerfile
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      NODE_ENV: production
+      AUTH_PORT: 3001
+      # Своя схема внутри той же базы, что и у остальных сервисов — ADR 0001.
+      AUTH_DATABASE_URL: postgresql://seatlock:${POSTGRES_PASSWORD}@postgres:5432/seatlock?schema=auth
+      JWT_ACCESS_SECRET: ${JWT_ACCESS_SECRET}
+      JWT_REFRESH_SECRET: ${JWT_REFRESH_SECRET}
+    # Порт наружу не публикуем — снаружи виден только gateway,
+    # он и проксирует /api/auth сюда по имени сервиса.
+
   gateway:
     # image используется, когда CI когда-нибудь начнёт пушить готовые
     # образы в ghcr.io и мы перейдём на "docker compose pull". Сегодня,
@@ -45,14 +64,17 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+      auth:
+        condition: service_healthy
     environment:
       NODE_ENV: production
       GATEWAY_PORT: 3000
       CORS_ORIGIN: https://seatlock.fun
       # Внутри compose-сети сервисы обращаются друг к другу по имени
-      # сервиса ("postgres", "redis"), а не по localhost.
+      # сервиса ("postgres", "redis", "auth"), а не по localhost.
       DATABASE_URL: postgresql://seatlock:${POSTGRES_PASSWORD}@postgres:5432/seatlock
       REDIS_URL: redis://redis:6379
+      AUTH_SERVICE_URL: http://auth:3001
       JWT_ACCESS_SECRET: ${JWT_ACCESS_SECRET}
       JWT_REFRESH_SECRET: ${JWT_REFRESH_SECRET}
 
