@@ -77,13 +77,16 @@ jobs:
             # на сервере он нигде не сохраняется постоянно, только на время pull.
             echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USER" --password-stdin
 
+            # Сервер клонирован как --single-branch, поэтому здесь нет
+            # локальной ветки "main" и "origin/main" по имени — переключаемся
+            # прямо на то, что скачал fetch, не полагаясь на имя ветки.
             git fetch origin main --quiet
-            git checkout main --quiet
-            git reset --hard origin/main --quiet
+            git checkout -B main --quiet FETCH_HEAD
 
             docker compose -f docker-compose.prod.yml pull gateway
             docker compose -f docker-compose.prod.yml up -d gateway
             docker image prune -f --filter "label!=keep"
+            docker logout ghcr.io >/dev/null
 
       - name: Проверка /health/ready после деплоя
         uses: appleboy/ssh-action@v1.2.0
