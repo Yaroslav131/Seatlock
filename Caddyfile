@@ -5,5 +5,21 @@
 seatlock.fun, www.seatlock.fun {
 	encode gzip
 
-	reverse_proxy gateway:3000
+	# API и health-проверки — на gateway. reverse_proxy в Caddy,
+	# в отличие от Express, не режет совпавший путь сам — /api/auth/login
+	# долетит до gateway ровно так же, целиком.
+	@backend path /api/* /health /health/ready
+	handle @backend {
+		reverse_proxy gateway:3000
+	}
+
+	# Всё остальное — статика React. try_files с фолбэком на index.html
+	# нужен для клиентского роутинга: прямой заход на /dashboard должен
+	# отдать ту же самую страницу, а не 404 — маршрутизацией внутри
+	# неё займётся уже React Router.
+	handle {
+		root * /srv/web
+		try_files {path} /index.html
+		file_server
+	}
 }
