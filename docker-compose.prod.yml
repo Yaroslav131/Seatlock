@@ -1,0 +1,80 @@
+name: seatlock
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: seatlock
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: seatlock
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U seatlock -d seatlock']
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    # Порт наружу намеренно не публикуем — Postgres доступен только
+    # другим контейнерам внутри этой compose-сети, не всему интернету.
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ['redis-server', '--appendonly', 'yes']
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  gateway:
+    # image используется, когда CI когда-нибудь начнёт пушить готовые
+    # образы в ghcr.io и мы перейдём на "docker compose pull". Сегодня,
+    # на первом ручном деплое, реально работает build — собираем
+    # прямо из склонированного на сервере репозитория.
+    image: ghcr.io/yaroslav131/seatlock-gateway:latest
+    build:
+      context: .
+      dockerfile: apps/gateway/Dockerfile
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      NODE_ENV: production
+      GATEWAY_PORT: 3000
+      CORS_ORIGIN: https://seatlock.fun
+      # Внутри compose-сети сервисы обращаются друг к другу по имени
+      # сервиса ("postgres", "redis"), а не по localhost.
+      DATABASE_URL: postgresql://seatlock:${POSTGRES_PASSWORD}@postgres:5432/seatlock
+      REDIS_URL: redis://redis:6379
+      JWT_ACCESS_SECRET: ${JWT_ACCESS_SECRET}
+      JWT_REFRESH_SECRET: ${JWT_REFRESH_SECRET}
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - '80:80'
+      - '443:443'
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      # Отдельный том для сертификатов и состояния Caddy — при перезапуске
+      # контейнера сертификат не перевыпускается заново с нуля.
+      - caddy_data:/data
+      - caddy_config:/config
+    environment:
+      CADDY_EMAIL: ${CADDY_EMAIL}
+    depends_on:
+      - gateway
+
+volumes:
+  pgdata:
+  redisdata:
+  caddy_data:
+  caddy_config:
