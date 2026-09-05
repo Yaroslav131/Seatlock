@@ -1,0 +1,22 @@
+node_modules/
+dist/
+build/
+coverage/
+.turbo/
+
+.env
+.env.*
+!.env.example
+
+*.log
+npm-debug.log*
+pnpm-debug.log*
+
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/*
+!.vscode/extensions.json
+
+# tsc incremental
+*.tsbuildinfo
