@@ -6,6 +6,9 @@ allowBuilds:
   # без него генерация клиента и миграции не работают.
   '@prisma/client': true
   '@prisma/engines': true
+  # Приходит с swagger-ui-dist — это просто install-телеметрия
+  # в Scarf.sh, на работу пакета не влияет. Не разрешаем.
+  '@scarf/scarf': false
   # esbuild ставит нативный бинарник под конкретную ОС/архитектуру —
   # без этого шага Vite не соберётся вообще.
   esbuild: true

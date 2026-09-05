@@ -1,38 +1,40 @@
 # SeatLock
 
 Продажа билетов на мероприятия с бронированием конкретных мест.
-Учебный микросервисный проект: NestJS, PostgreSQL, Redis, RabbitMQ, React, Stripe, AWS.
+Учебный микросервисный проект: NestJS, PostgreSQL, Redis, RabbitMQ, React, Stripe.
 
 Ключевая задача проекта — **не продать одно место дважды** при сотнях одновременных
 запросов. Всё остальное строится вокруг этого инварианта.
 
+**Продакшн:** [seatlock.fun](https://seatlock.fun)
+
 ## Стек
 
-| Слой               | Технологии                                 |
-| ------------------ | ------------------------------------------ |
-| Бэкенд             | NestJS 11, TypeScript                      |
-| Основная база      | PostgreSQL 17                              |
-| Кэш и холды мест   | Redis 7                                    |
-| Очереди            | RabbitMQ 4                                 |
-| Журнал уведомлений | MongoDB 8                                  |
-| Файлы              | S3 (локально — MinIO)                      |
-| Платежи            | Stripe (тестовый режим)                    |
-| Фронтенд           | React, Vite, TypeScript                    |
-| Инфраструктура     | Docker, GitHub Actions, Terraform, AWS ECS |
+| Слой               | Технологии                                         |
+| ------------------ | -------------------------------------------------- |
+| Бэкенд             | NestJS 11, TypeScript, Prisma                      |
+| Основная база      | PostgreSQL 17 (своя схема на каждый сервис)        |
+| Кэш и холды мест   | Redis 7                                            |
+| Очереди            | RabbitMQ 4                                         |
+| Журнал уведомлений | MongoDB 8                                          |
+| Файлы              | S3 (локально — MinIO)                              |
+| Платежи            | Stripe (тестовый режим)                            |
+| Фронтенд           | React 19, Vite, TypeScript, Zustand                |
+| Инфраструктура     | Docker, GitHub Actions (CI/CD), Caddy, свой сервер |
 
 ## Быстрый старт
 
 Нужны Node.js 22+, pnpm и Docker.
 
 ```bash
-git clone <repo> && cd seatlock
+git clone https://github.com/Yaroslav131/Seatlock.git && cd Seatlock
 cp .env.example .env
 pnpm install
 pnpm infra:up
 pnpm dev
 ```
 
-Проверить, что всё поднялось:
+Проверить, что бэкенд поднялся:
 
 ```bash
 curl http://localhost:3000/health/ready
@@ -52,6 +54,9 @@ curl http://localhost:3000/health/ready
 }
 ```
 
+Фронтенд — на http://localhost:5173 (dev-сервер Vite сам проксирует `/api` на gateway,
+поэтому браузер видит всё как один origin даже локально).
+
 ## Порты
 
 Порты намеренно сдвинуты от стандартных, чтобы не конфликтовать
@@ -59,7 +64,9 @@ curl http://localhost:3000/health/ready
 
 | Сервис     | Порт        | Веб-интерфейс                                  |
 | ---------- | ----------- | ---------------------------------------------- |
+| web        | 5173        | http://localhost:5173                          |
 | gateway    | 3000        | —                                              |
+| auth       | 3001        | —                                              |
 | PostgreSQL | 5433        | —                                              |
 | Redis      | 6380        | —                                              |
 | RabbitMQ   | 5673        | http://localhost:15673 (seatlock / seatlock)   |
@@ -75,6 +82,7 @@ curl http://localhost:3000/health/ready
 | `pnpm build`       | Собирает все пакеты                  |
 | `pnpm lint`        | ESLint по всему монорепозиторию      |
 | `pnpm typecheck`   | Проверка типов без сборки            |
+| `pnpm test`        | Тесты (сейчас есть только у `auth`)  |
 | `pnpm format`      | Форматирование Prettier              |
 | `pnpm infra:up`    | Поднимает Docker-инфраструктуру      |
 | `pnpm infra:down`  | Останавливает контейнеры             |
@@ -84,32 +92,75 @@ curl http://localhost:3000/health/ready
 ## Структура
 
 ```
-apps/          сервисы и фронтенд
-  gateway/     единый вход: REST, WebSocket, проверка JWT, rate limit
-packages/      общий код: контракты, конфиг, логгер
+apps/
+  gateway/     единый публичный вход: REST, проверка JWT, rate limit,
+               прозрачный прокси на auth
+  auth/        регистрация, вход, JWT с ротацией refresh-токенов
+  web/         React-фронтенд (Vite)
 docs/adr/      архитектурные решения и их причины
+docker-compose.yml       локальная инфраструктура для разработки
+docker-compose.prod.yml  боевой стек (запускается на сервере)
+Caddyfile                reverse-proxy + автоматический HTTPS в проде
 ```
 
 ## Сервисы
 
-| Сервис         | Отвечает за                      | Статус      |
-| -------------- | -------------------------------- | ----------- |
-| `gateway`      | Публичный вход, health-эндпоинты | в работе    |
-| `auth`         | Пользователи, JWT, роли          | планируется |
-| `catalog`      | События, залы, схемы мест        | планируется |
-| `booking`      | Холды мест, заказы, сага         | планируется |
-| `payment`      | Stripe, вебхуки, возвраты        | планируется |
-| `notification` | PDF-билеты, письма               | планируется |
+| Сервис         | Отвечает за                                            | Статус      |
+| -------------- | ------------------------------------------------------ | ----------- |
+| `gateway`      | Публичный вход, health-эндпоинты, проверка JWT, прокси | в проде     |
+| `auth`         | Пользователи, JWT, ротация refresh, rate limit         | в проде     |
+| `web`          | Фронтенд: вход, регистрация, личный кабинет            | в проде     |
+| `catalog`      | События, залы, схемы мест                              | планируется |
+| `booking`      | Холды мест, заказы, сага                               | планируется |
+| `payment`      | Stripe, вебхуки, возвраты                              | планируется |
+| `notification` | PDF-билеты, письма                                     | планируется |
+
+## API-документация
+
+Swagger — отдельно на каждом сервисе, который отвечает наружу:
+
+- [seatlock.fun/api/docs](https://seatlock.fun/api/docs) — `gateway`
+- [seatlock.fun/api/auth/docs](https://seatlock.fun/api/auth/docs) — `auth` (виден через прокси gateway)
+
+Локально — `http://localhost:3000/api/docs` и `http://localhost:3001/api/auth/docs`.
+
+## Продакшн
+
+Всё крутится на одном арендованном сервере. **Caddy** — единственная программа,
+которая напрямую видит интернет: сам получает и продлевает HTTPS-сертификат,
+раздаёт статику фронтенда и проксирует `/api/*` на `gateway`.
+
+```
+seatlock.fun
+    │
+    ▼
+[ Caddy ]  — HTTPS, один вход
+ │       │
+ │       └──▶ статика React (apps/web, залита по SCP)
+ │
+ └──▶ /api/* ──▶ [ gateway ] ──▶ [ auth ]   (только вход/регистрация)
+                     │
+                     └── сам проверяет JWT для остального
+```
+
+**Деплой** — GitHub Actions ([.github/workflows/cd.yml](.github/workflows/cd.yml)) при
+каждом пуше в `main`: собирает Docker-образы `gateway`/`auth`, публикует в `ghcr.io`,
+собирает и заливает статику `web` по SSH, применяет миграции Prisma отдельным шагом
+(до перезапуска контейнеров), проверяет здоровье после деплоя.
+
+Ветка `main` защищена — попасть туда можно только через Pull Request после
+зелёного CI ([.github/workflows/ci.yml](.github/workflows/ci.yml)): форматирование,
+линтер, типы, тесты, сборка.
 
 ## План по фазам
 
 - [x] **00 — Скелет.** Монорепо, Docker, линтеры, CI, health-эндпоинты
-- [ ] **01 — Авторизация.** JWT с ротацией refresh, роли, React-скелет
+- [x] **01 — Авторизация.** JWT с ротацией refresh, rate limit, React-скелет
+- [x] **06 — Облако.** Свой сервер вместо AWS, Docker Compose, Caddy, полный CD _(раньше по плану — понадобилось для практики DevOps)_
 - [ ] **02 — Каталог.** События, схемы залов, кэш в Redis
 - [ ] **03 — Бронирование.** Холды с TTL, конкурентность, нагрузочный тест
 - [ ] **04 — Платежи.** Stripe, вебхуки, сага, транзакционный outbox
 - [ ] **05 — Уведомления.** RabbitMQ, PDF с QR, S3, DLQ
-- [ ] **06 — Облако.** Terraform, ECS, RDS, ElastiCache, полный CD
 - [ ] **07 — Наблюдаемость.** Трейсинг, метрики, нагрузочный тест, документация
 
 ## Архитектурные решения
