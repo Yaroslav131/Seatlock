@@ -67,6 +67,19 @@ export class EventsService {
     return updated;
   }
 
+  /**
+   * Свои события в любом статусе — без этого организатор не увидит
+   * собственный черновик нигде, кроме как запомнив id из ответа при
+   * создании. Не кэшируем: маленькая, редко запрашиваемая, приватная
+   * выборка, свежесть важнее экономии на одном запросе.
+   */
+  findMine(organizerId: string): Promise<EventResponseDto[]> {
+    return this.prisma.event.findMany({
+      where: { organizerId },
+      orderBy: { createdAt: 'desc' },
+    });
+  }
+
   async findPublished(): Promise<EventResponseDto[]> {
     const cached = await this.redis.get(PUBLISHED_LIST_CACHE_KEY);
     if (cached) {

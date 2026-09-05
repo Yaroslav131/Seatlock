@@ -1,3 +1,4 @@
+import tailwindcss from '@tailwindcss/vite';
 import react from '@vitejs/plugin-react';
 import { defineConfig } from 'vite';
 
@@ -7,7 +8,7 @@ import { defineConfig } from 'vite';
 // (SameSite=None, только по HTTPS) — так проще и ровно то же самое,
 // что в проде сделает Caddy, отдавая фронт и API с одного домена.
 export default defineConfig({
-  plugins: [react()],
+  plugins: [react(), tailwindcss()],
   server: {
     port: 5173,
     proxy: {
