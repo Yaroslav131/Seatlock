@@ -13,18 +13,20 @@ concurrency:
   group: cd-production
   cancel-in-progress: false
 
-env:
-  IMAGE: ghcr.io/yaroslav131/seatlock-gateway
-
 jobs:
   build-and-push:
-    name: Собрать и опубликовать образ
+    name: Собрать и опубликовать образы
     runs-on: ubuntu-latest
     permissions:
       contents: read
       packages: write
-    outputs:
-      image_tag: ${{ steps.meta.outputs.tag }}
+    strategy:
+      matrix:
+        service:
+          - name: gateway
+            dockerfile: apps/gateway/Dockerfile
+          - name: auth
+            dockerfile: apps/auth/Dockerfile
     steps:
       - uses: actions/checkout@v4
 
@@ -37,29 +39,28 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - id: meta
-        run: echo "tag=${GITHUB_SHA::12}" >> "$GITHUB_OUTPUT"
-
-      - name: Сборка и пуш
+      - name: Сборка и пуш ${{ matrix.service.name }}
         uses: docker/build-push-action@v6
         with:
           context: .
-          file: apps/gateway/Dockerfile
+          file: ${{ matrix.service.dockerfile }}
           push: true
           tags: |
-            ${{ env.IMAGE }}:latest
-            ${{ env.IMAGE }}:${{ steps.meta.outputs.tag }}
+            ghcr.io/yaroslav131/seatlock-${{ matrix.service.name }}:latest
+            ghcr.io/yaroslav131/seatlock-${{ matrix.service.name }}:${{ github.sha }}
           # Кэш слоёв сборки живёт между запусками CI — повторная сборка
           # без изменений в зависимостях займёт секунды, а не минуты.
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          # Свой scope на сервис — иначе кэш auth и gateway перезаписывали
+          # бы друг друга.
+          cache-from: type=gha,scope=${{ matrix.service.name }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.service.name }}
 
   deploy:
     name: Развернуть на сервере
     needs: build-and-push
     runs-on: ubuntu-latest
     steps:
-      - name: Обновить контейнер по SSH
+      - name: Обновить контейнеры по SSH
         uses: appleboy/ssh-action@v1.2.0
         env:
           GHCR_USER: ${{ github.actor }}
@@ -83,12 +84,18 @@ jobs:
             git fetch origin main --quiet
             git checkout -B main --quiet FETCH_HEAD
 
-            docker compose -f docker-compose.prod.yml pull gateway
-            docker compose -f docker-compose.prod.yml up -d gateway
+            docker compose -f docker-compose.prod.yml pull auth gateway
+
+            # Миграции — отдельным шагом, до запуска новых контейнеров,
+            # а не при старте приложения (ADR 0001): несколько параллельных
+            # реплик не должны наперегонки мигрировать одну и ту же базу.
+            docker compose -f docker-compose.prod.yml run --rm auth npx prisma migrate deploy
+
+            docker compose -f docker-compose.prod.yml up -d auth gateway
             docker image prune -f --filter "label!=keep"
             docker logout ghcr.io >/dev/null
 
-      - name: Проверка /health/ready после деплоя
+      - name: Проверка здоровья после деплоя
         uses: appleboy/ssh-action@v1.2.0
         with:
           host: ${{ secrets.DEPLOY_HOST }}
@@ -96,18 +103,23 @@ jobs:
           key: ${{ secrets.DEPLOY_SSH_KEY }}
           script: |
             set -e
-            # У gateway нет опубликованного порта на хост — снаружи
-            # к нему обращается только Caddy по внутренней сети. Поэтому
-            # проверяем не curl'ом с хоста, а собственным Docker HEALTHCHECK
-            # контейнера — тем же самым, что описан в Dockerfile.
-            for i in $(seq 1 10); do
-              status=$(docker inspect --format '{{.State.Health.Status}}' seatlock-gateway-1)
-              if [ "$status" = "healthy" ]; then
-                echo "OK: контейнер healthy"
-                exit 0
+            # У сервисов нет опубликованных портов на хост — снаружи виден
+            # только Caddy. Проверяем не curl'ом, а собственным Docker
+            # HEALTHCHECK каждого контейнера.
+            for name in seatlock-auth-1 seatlock-gateway-1; do
+              ok=false
+              for i in $(seq 1 10); do
+                status=$(docker inspect --format '{{.State.Health.Status}}' "$name")
+                if [ "$status" = "healthy" ]; then
+                  echo "OK: $name healthy"
+                  ok=true
+                  break
+                fi
+                sleep 3
+              done
+              if [ "$ok" != "true" ]; then
+                echo "ОШИБКА: $name не стал healthy за 30 секунд после деплоя"
+                docker logs "$name" --tail 50
+                exit 1
               fi
-              sleep 3
             done
-            echo "ОШИБКА: контейнер не стал healthy за 30 секунд после деплоя"
-            docker logs seatlock-gateway-1 --tail 50
-            exit 1
