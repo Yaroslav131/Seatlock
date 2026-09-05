@@ -21,3 +21,8 @@ Thumbs.db
 
 # tsc incremental
 *.tsbuildinfo
+
+# Сгенерированный Prisma-клиент — свой у каждого сервиса
+# (см. output в соответствующих schema.prisma), пересоздаётся
+# на каждой установке зависимостей.
+**/src/generated/

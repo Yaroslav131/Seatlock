@@ -4,7 +4,17 @@ import tseslint from 'typescript-eslint';
 import prettier from 'eslint-config-prettier';
 
 export default tseslint.config(
-  { ignores: ['**/dist/**', '**/node_modules/**', '**/.turbo/**', '**/coverage/**'] },
+  {
+    ignores: [
+      '**/dist/**',
+      '**/node_modules/**',
+      '**/.turbo/**',
+      '**/coverage/**',
+      // Сгенерированный Prisma-клиент — не наш код, не должен
+      // проверяться линтером (это минифицированный рантайм).
+      '**/src/generated/**',
+    ],
+  },
   js.configs.recommended,
   ...tseslint.configs.recommended,
   {

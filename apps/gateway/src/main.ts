@@ -41,6 +41,18 @@ async function bootstrap(): Promise<void> {
     }),
   );
 
+  // Тот же приём для catalog: события/залы публичные для чтения,
+  // а запись сам catalog защищает своим JwtAuthGuard + RolesGuard —
+  // gateway тут снова просто труба, не разбирается в содержимом.
+  const catalogServiceUrl = config.get<string>('CATALOG_SERVICE_URL', 'http://localhost:3002');
+  app.use(
+    createProxyMiddleware({
+      target: catalogServiceUrl,
+      changeOrigin: true,
+      pathFilter: '/api/catalog',
+    }),
+  );
+
   // Парсер тела нужен только тем маршрутам, что реально обрабатывает
   // сам gateway — до прокси-путей он не достаёт, т.к. тот уже
   // ответил и не вызывает next().
