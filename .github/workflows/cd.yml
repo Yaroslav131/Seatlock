@@ -96,13 +96,18 @@ jobs:
           key: ${{ secrets.DEPLOY_SSH_KEY }}
           script: |
             set -e
+            # У gateway нет опубликованного порта на хост — снаружи
+            # к нему обращается только Caddy по внутренней сети. Поэтому
+            # проверяем не curl'ом с хоста, а собственным Docker HEALTHCHECK
+            # контейнера — тем же самым, что описан в Dockerfile.
             for i in $(seq 1 10); do
-              if curl -sf http://localhost:3000/health/ready > /dev/null; then
-                echo "OK: сервис отвечает"
+              status=$(docker inspect --format '{{.State.Health.Status}}' seatlock-gateway-1)
+              if [ "$status" = "healthy" ]; then
+                echo "OK: контейнер healthy"
                 exit 0
               fi
               sleep 3
             done
-            echo "ОШИБКА: /health/ready не ответил за 30 секунд после деплоя"
+            echo "ОШИБКА: контейнер не стал healthy за 30 секунд после деплоя"
             docker logs seatlock-gateway-1 --tail 50
             exit 1
