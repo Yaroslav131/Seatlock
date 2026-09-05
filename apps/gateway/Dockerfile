@@ -6,7 +6,11 @@
 FROM node:22-slim AS build
 WORKDIR /repo
 
-RUN corepack enable
+# npm install -g вместо "corepack enable": у corepack известный баг в Node 22
+# (undici падает с assert(!this.paused) при скачивании пакета pnpm
+# на некоторых сетях, включая раннеры GitHub Actions) — обходим его,
+# ставя точную версию через обычный npm.
+RUN npm install -g pnpm@11.25.0
 
 # Сначала копируем только файлы, от которых зависит установка пакетов.
 # Так Docker закэширует слой pnpm install и не будет пересобирать его
@@ -26,7 +30,11 @@ FROM node:22-alpine AS runtime
 WORKDIR /app
 ENV NODE_ENV=production
 
-RUN corepack enable
+# npm install -g вместо "corepack enable": у corepack известный баг в Node 22
+# (undici падает с assert(!this.paused) при скачивании пакета pnpm
+# на некоторых сетях, включая раннеры GitHub Actions) — обходим его,
+# ставя точную версию через обычный npm.
+RUN npm install -g pnpm@11.25.0
 
 COPY package.json pnpm-workspace.yaml pnpm-lock.yaml tsconfig.base.json ./
 COPY apps/gateway/package.json apps/gateway/
