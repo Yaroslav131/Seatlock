@@ -55,6 +55,42 @@ jobs:
           cache-from: type=gha,scope=${{ matrix.service.name }}
           cache-to: type=gha,mode=max,scope=${{ matrix.service.name }}
 
+  build-and-deploy-web:
+    name: Собрать и залить фронтенд
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Установка зависимостей
+        run: pnpm install --frozen-lockfile
+
+      - name: Сборка
+        run: pnpm --filter @seatlock/web build
+
+      - name: Залить на сервер
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+        run: |
+          set -e
+          mkdir -p ~/.ssh
+          echo "$DEPLOY_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+
+          # tar в stdout | ssh | tar из stdin — детерминированно распаковывает
+          # содержимое dist прямо в web-dist, без сюрпризов с тем, как
+          # сторонний SCP-экшен трактует глобы и вложенность папок.
+          tar -C apps/web/dist -czf - . | \
+            ssh -o StrictHostKeyChecking=accept-new -i ~/.ssh/deploy_key deploy@"$DEPLOY_HOST" \
+            'mkdir -p ~/seatlock/web-dist && tar -C ~/seatlock/web-dist -xzf -'
+
   deploy:
     name: Развернуть на сервере
     needs: build-and-push
@@ -91,7 +127,10 @@ jobs:
             # реплик не должны наперегонки мигрировать одну и ту же базу.
             docker compose -f docker-compose.prod.yml run --rm auth npx prisma migrate deploy
 
-            docker compose -f docker-compose.prod.yml up -d auth gateway
+            # caddy тоже в списке: сам образ не меняется, но docker compose
+            # up сам заметит, если поменялось описание сервиса (например,
+            # новый volume под статику фронтенда) и пересоздаст только его.
+            docker compose -f docker-compose.prod.yml up -d auth gateway caddy
             docker image prune -f --filter "label!=keep"
             docker logout ghcr.io >/dev/null
 
