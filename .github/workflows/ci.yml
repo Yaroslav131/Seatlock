@@ -43,5 +43,8 @@ jobs:
       - name: Проверка типов
         run: pnpm typecheck
 
+      - name: Тесты
+        run: pnpm test
+
       - name: Сборка
         run: pnpm build
