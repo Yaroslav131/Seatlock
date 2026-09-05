@@ -115,6 +115,15 @@ Caddyfile                reverse-proxy + автоматический HTTPS в �
 | `payment`      | Stripe, вебхуки, возвраты                              | планируется |
 | `notification` | PDF-билеты, письма                                     | планируется |
 
+## API-документация
+
+Swagger — отдельно на каждом сервисе, который отвечает наружу:
+
+- [seatlock.fun/api/docs](https://seatlock.fun/api/docs) — `gateway`
+- [seatlock.fun/api/auth/docs](https://seatlock.fun/api/auth/docs) — `auth` (виден через прокси gateway)
+
+Локально — `http://localhost:3000/api/docs` и `http://localhost:3001/api/auth/docs`.
+
 ## Продакшн
 
 Всё крутится на одном арендованном сервере. **Caddy** — единственная программа,

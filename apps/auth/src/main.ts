@@ -3,6 +3,7 @@ import { Logger, ValidationPipe } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { NestFactory } from '@nestjs/core';
 import { NestExpressApplication } from '@nestjs/platform-express';
+import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import cookieParser from 'cookie-parser';
 import { AppModule } from './app.module';
 
@@ -28,6 +29,15 @@ async function bootstrap(): Promise<void> {
     }),
   );
   app.enableShutdownHooks();
+
+  // Путь нарочно под /api/auth: gateway проксирует туда всё целиком,
+  // а собственного порта наружу у auth нет — иначе документация была
+  // бы недостижима снаружи вообще.
+  const swaggerDoc = SwaggerModule.createDocument(
+    app,
+    new DocumentBuilder().setTitle('SeatLock — auth').setVersion('1.0').build(),
+  );
+  SwaggerModule.setup('api/auth/docs', app, swaggerDoc);
 
   const port = Number(config.get<string>('AUTH_PORT', '3001'));
   await app.listen(port, '0.0.0.0');
