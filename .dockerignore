@@ -1,0 +1,13 @@
+# Docker собирает из корня репозитория, поэтому .dockerignore должен
+# лежать именно здесь, а не в apps/*/.dockerignore — иначе не сработает.
+**/node_modules
+**/dist
+**/.turbo
+**/*.tsbuildinfo
+.git
+.github
+.vscode
+.env
+.env.*
+!.env.example
+*.log
