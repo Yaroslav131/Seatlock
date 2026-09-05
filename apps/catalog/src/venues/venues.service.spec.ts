@@ -7,6 +7,7 @@ function createPrismaMock() {
     venue: {
       create: jest.fn(),
       findUnique: jest.fn(),
+      findMany: jest.fn(),
     },
     seat: {
       createMany: jest.fn(),
@@ -42,6 +43,22 @@ describe('VenuesService', () => {
 
       const venue = await service.findOne('v1');
       expect(venue.seatCount).toBe(42);
+    });
+  });
+
+  describe('findAll', () => {
+    it('считает seatCount для каждого зала из _count', async () => {
+      prisma.venue.findMany.mockResolvedValue([
+        { id: 'v1', name: 'A', city: 'C', address: 'Addr', _count: { seats: 10 } },
+        { id: 'v2', name: 'B', city: 'C', address: 'Addr', _count: { seats: 0 } },
+      ]);
+
+      const venues = await service.findAll();
+
+      expect(venues).toEqual([
+        { id: 'v1', name: 'A', city: 'C', address: 'Addr', seatCount: 10 },
+        { id: 'v2', name: 'B', city: 'C', address: 'Addr', seatCount: 0 },
+      ]);
     });
   });
 

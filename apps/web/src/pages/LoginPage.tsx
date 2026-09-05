@@ -1,9 +1,14 @@
-import type { JSX } from 'react';
-import { FormEvent, useState } from 'react';
+import type { FormEvent, JSX } from 'react';
+import { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
+import { Alert } from '../components/ui/Alert';
+import { Button } from '../components/ui/Button';
+import { Card, CardBody } from '../components/ui/Card';
+import { Field } from '../components/ui/Field';
+import { Input } from '../components/ui/Input';
+import { ApiError } from '../lib/api-client';
 import { login } from '../lib/auth-api';
 import { useAuthStore } from '../lib/auth-store';
-import { ApiError } from '../lib/api-client';
 
 export function LoginPage(): JSX.Element {
   const navigate = useNavigate();
@@ -29,38 +34,53 @@ export function LoginPage(): JSX.Element {
   }
 
   return (
-    <div className="auth-page">
-      <form className="auth-form" onSubmit={handleSubmit}>
-        <h1>Вход</h1>
-        <label>
-          Email
-          <input
-            type="email"
-            value={email}
-            onChange={(e) => setEmail(e.target.value)}
-            required
-            autoComplete="email"
-          />
-        </label>
-        <label>
-          Пароль
-          <input
-            type="password"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            required
-            minLength={8}
-            autoComplete="current-password"
-          />
-        </label>
-        {error && <p className="auth-error">{error}</p>}
-        <button type="submit" disabled={loading}>
-          {loading ? 'Входим…' : 'Войти'}
-        </button>
-        <p>
-          Нет аккаунта? <Link to="/register">Зарегистрироваться</Link>
-        </p>
-      </form>
+    <div className="mx-auto flex max-w-sm flex-col gap-6 pt-10">
+      <div className="text-center">
+        <h1 className="text-2xl font-semibold tracking-tight text-ink-900">С возвращением</h1>
+        <p className="mt-1 text-sm text-ink-500">Войдите, чтобы продолжить</p>
+      </div>
+
+      <Card>
+        <CardBody>
+          <form className="flex flex-col gap-4" onSubmit={handleSubmit} noValidate>
+            <Field label="Email" htmlFor="email">
+              <Input
+                id="email"
+                type="email"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                required
+                autoComplete="email"
+                autoFocus
+              />
+            </Field>
+            <Field label="Пароль" htmlFor="password">
+              <Input
+                id="password"
+                type="password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                required
+                minLength={8}
+                autoComplete="current-password"
+              />
+            </Field>
+
+            {error && <Alert>{error}</Alert>}
+
+            <Button type="submit" loading={loading} className="mt-2 w-full">
+              Войти
+            </Button>
+          </form>
+        </CardBody>
+      </Card>
+
+      <p className="text-center text-sm text-ink-500">
+        Нет аккаунта?{' '}
+        <Link to="/register" className="font-medium text-brand-600 hover:text-brand-700">
+          Зарегистрироваться
+        </Link>
+      </p>
     </div>
   );
 }

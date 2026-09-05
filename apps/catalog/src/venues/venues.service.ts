@@ -13,6 +13,22 @@ export class VenuesService {
     return { ...venue, seatCount: 0 };
   }
 
+  /**
+   * Залы не принадлежат конкретному организатору (в отличие от
+   * событий) — это общая инфраструктура, которую может переиспользовать
+   * любой организатор для своих событий. Поэтому список без фильтра.
+   */
+  async findAll(): Promise<VenueResponseDto[]> {
+    const venues = await this.prisma.venue.findMany({
+      include: { _count: { select: { seats: true } } },
+      orderBy: { createdAt: 'desc' },
+    });
+    // Деструктурируем _count явно, а не просто ...venue — иначе он
+    // утекает в JSON-ответ API как есть, это внутренняя форма запроса
+    // Prisma, а не то, что должен видеть клиент.
+    return venues.map(({ _count, ...venue }) => ({ ...venue, seatCount: _count.seats }));
+  }
+
   async findOne(id: string): Promise<VenueResponseDto> {
     const venue = await this.prisma.venue.findUnique({
       where: { id },
@@ -21,7 +37,8 @@ export class VenuesService {
     if (!venue) {
       throw new NotFoundException('Зал не найден');
     }
-    return { ...venue, seatCount: venue._count.seats };
+    const { _count, ...rest } = venue;
+    return { ...rest, seatCount: _count.seats };
   }
 
   /**

@@ -35,3 +35,13 @@ export function decodeAccessToken(token: string): DecodedAccessToken | null {
     return null;
   }
 }
+
+/**
+ * Удобный хук для интерфейса: «залогинен ли» и «какая роль» одним
+ * вызовом — например, чтобы показать пункт меню только организатору.
+ * Не источник истины для доступа — только для того, что показать.
+ */
+export function useCurrentUser(): DecodedAccessToken | null {
+  const accessToken = useAuthStore((state) => state.accessToken);
+  return accessToken ? decodeAccessToken(accessToken) : null;
+}
