@@ -27,6 +27,8 @@ jobs:
             dockerfile: apps/gateway/Dockerfile
           - name: auth
             dockerfile: apps/auth/Dockerfile
+          - name: catalog
+            dockerfile: apps/catalog/Dockerfile
     steps:
       - uses: actions/checkout@v4
 
@@ -120,17 +122,18 @@ jobs:
             git fetch origin main --quiet
             git checkout -B main --quiet FETCH_HEAD
 
-            docker compose -f docker-compose.prod.yml pull auth gateway
+            docker compose -f docker-compose.prod.yml pull auth catalog gateway
 
             # Миграции — отдельным шагом, до запуска новых контейнеров,
             # а не при старте приложения (ADR 0001): несколько параллельных
             # реплик не должны наперегонки мигрировать одну и ту же базу.
             docker compose -f docker-compose.prod.yml run --rm auth npx prisma migrate deploy
+            docker compose -f docker-compose.prod.yml run --rm catalog npx prisma migrate deploy
 
             # caddy тоже в списке: сам образ не меняется, но docker compose
             # up сам заметит, если поменялось описание сервиса (например,
             # новый volume под статику фронтенда) и пересоздаст только его.
-            docker compose -f docker-compose.prod.yml up -d auth gateway caddy
+            docker compose -f docker-compose.prod.yml up -d auth catalog gateway caddy
             docker image prune -f --filter "label!=keep"
             docker logout ghcr.io >/dev/null
 
@@ -145,7 +148,7 @@ jobs:
             # У сервисов нет опубликованных портов на хост — снаружи виден
             # только Caddy. Проверяем не curl'ом, а собственным Docker
             # HEALTHCHECK каждого контейнера.
-            for name in seatlock-auth-1 seatlock-gateway-1; do
+            for name in seatlock-auth-1 seatlock-catalog-1 seatlock-gateway-1; do
               ok=false
               for i in $(seq 1 10); do
                 status=$(docker inspect --format '{{.State.Health.Status}}' "$name")

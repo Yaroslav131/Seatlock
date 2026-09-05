@@ -1,0 +1,64 @@
+generator client {
+  provider = "prisma-client-js"
+  // Свой output — иначе делит один и тот же сгенерированный клиент
+  // с auth (у обоих одинаковая версия @prisma/client).
+  output = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("CATALOG_DATABASE_URL")
+}
+
+enum EventStatus {
+  DRAFT
+  PUBLISHED
+  CANCELLED
+}
+
+model Venue {
+  id        String   @id @default(uuid())
+  name      String
+  city      String
+  address   String
+  seats     Seat[]
+  events    Event[]
+  createdAt DateTime @default(now())
+
+  @@map("venues")
+}
+
+model Seat {
+  id      String  @id @default(uuid())
+  venueId String
+  venue   Venue   @relation(fields: [venueId], references: [id], onDelete: Cascade)
+  section String?
+  row     Int
+  number  Int
+
+  // Одно и то же место не может быть сгенерировано в зале дважды.
+  @@unique([venueId, section, row, number])
+  @@index([venueId])
+  @@map("seats")
+}
+
+// organizerId — просто id пользователя из JWT (sub), без внешнего
+// ключа на таблицу users: она в другой схеме, у другого сервиса.
+// В микросервисах так и должно быть — целостность здесь на уровне
+// приложения (проверка роли), а не на уровне базы.
+model Event {
+  id             String      @id @default(uuid())
+  venueId        String
+  venue          Venue       @relation(fields: [venueId], references: [id])
+  organizerId    String
+  title          String
+  description    String?
+  startsAt       DateTime
+  basePriceCents Int
+  status         EventStatus @default(DRAFT)
+  createdAt      DateTime    @default(now())
+  updatedAt      DateTime    @updatedAt
+
+  @@index([status, startsAt])
+  @@map("events")
+}

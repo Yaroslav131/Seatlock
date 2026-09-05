@@ -1,6 +1,6 @@
 import { ConflictException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { Role } from '@prisma/client';
+import { Role } from '../generated/prisma';
 import * as jwt from 'jsonwebtoken';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuthService } from './auth.service';
