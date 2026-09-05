@@ -2,6 +2,7 @@ import 'reflect-metadata';
 import { Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { NestFactory } from '@nestjs/core';
+import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import { json, urlencoded } from 'express';
 import { createProxyMiddleware } from 'http-proxy-middleware';
 import { AppModule } from './app.module';
@@ -49,6 +50,14 @@ async function bootstrap(): Promise<void> {
   // Health-эндпоинты выносим за префикс /api, чтобы балансировщик
   // в AWS мог опрашивать их напрямую по короткому пути.
   app.setGlobalPrefix('api', { exclude: ['health', 'health/ready'] });
+
+  // /api/docs, а не /api/auth/... — сюда pathFilter прокси не достаёт,
+  // маршрут остаётся на самом gateway, а не улетает на auth.
+  const swaggerDoc = SwaggerModule.createDocument(
+    app,
+    new DocumentBuilder().setTitle('SeatLock — gateway').setVersion('1.0').addBearerAuth().build(),
+  );
+  SwaggerModule.setup('api/docs', app, swaggerDoc);
 
   // Без этого Nest не вызовет onApplicationShutdown по SIGTERM,
   // и при каждом деплое мы будем терять запросы в обработке.
