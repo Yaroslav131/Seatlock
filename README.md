@@ -67,6 +67,7 @@ curl http://localhost:3000/health/ready
 | web        | 5173        | http://localhost:5173                          |
 | gateway    | 3000        | —                                              |
 | auth       | 3001        | —                                              |
+| catalog    | 3002        | —                                              |
 | PostgreSQL | 5433        | —                                              |
 | Redis      | 6380        | —                                              |
 | RabbitMQ   | 5673        | http://localhost:15673 (seatlock / seatlock)   |
@@ -82,7 +83,7 @@ curl http://localhost:3000/health/ready
 | `pnpm build`       | Собирает все пакеты                  |
 | `pnpm lint`        | ESLint по всему монорепозиторию      |
 | `pnpm typecheck`   | Проверка типов без сборки            |
-| `pnpm test`        | Тесты (сейчас есть только у `auth`)  |
+| `pnpm test`        | Тесты (`auth`, `catalog`)            |
 | `pnpm format`      | Форматирование Prettier              |
 | `pnpm infra:up`    | Поднимает Docker-инфраструктуру      |
 | `pnpm infra:down`  | Останавливает контейнеры             |
@@ -94,8 +95,9 @@ curl http://localhost:3000/health/ready
 ```
 apps/
   gateway/     единый публичный вход: REST, проверка JWT, rate limit,
-               прозрачный прокси на auth
+               прозрачный прокси на auth и catalog
   auth/        регистрация, вход, JWT с ротацией refresh-токенов
+  catalog/     залы, схемы мест, события, роли, кэш в Redis
   web/         React-фронтенд (Vite)
 docs/adr/      архитектурные решения и их причины
 docker-compose.yml       локальная инфраструктура для разработки
@@ -110,7 +112,7 @@ Caddyfile                reverse-proxy + автоматический HTTPS в �
 | `gateway`      | Публичный вход, health-эндпоинты, проверка JWT, прокси | в проде     |
 | `auth`         | Пользователи, JWT, ротация refresh, rate limit         | в проде     |
 | `web`          | Фронтенд: вход, регистрация, личный кабинет            | в проде     |
-| `catalog`      | События, залы, схемы мест                              | планируется |
+| `catalog`      | Залы, схемы мест, события, кэш в Redis                 | в проде     |
 | `booking`      | Холды мест, заказы, сага                               | планируется |
 | `payment`      | Stripe, вебхуки, возвраты                              | планируется |
 | `notification` | PDF-билеты, письма                                     | планируется |
@@ -121,8 +123,10 @@ Swagger — отдельно на каждом сервисе, который о
 
 - [seatlock.fun/api/docs](https://seatlock.fun/api/docs) — `gateway`
 - [seatlock.fun/api/auth/docs](https://seatlock.fun/api/auth/docs) — `auth` (виден через прокси gateway)
+- [seatlock.fun/api/catalog/docs](https://seatlock.fun/api/catalog/docs) — `catalog` (виден через прокси gateway)
 
-Локально — `http://localhost:3000/api/docs` и `http://localhost:3001/api/auth/docs`.
+Локально — `http://localhost:3000/api/docs`, `http://localhost:3001/api/auth/docs`,
+`http://localhost:3002/api/catalog/docs`.
 
 ## Продакшн
 
@@ -138,13 +142,14 @@ seatlock.fun
  │       │
  │       └──▶ статика React (apps/web, залита по SCP)
  │
- └──▶ /api/* ──▶ [ gateway ] ──▶ [ auth ]   (только вход/регистрация)
+ └──▶ /api/* ──▶ [ gateway ] ──▶ [ auth ]      (только вход/регистрация)
+                     │       ──▶ [ catalog ]   (создание залов/событий — RolesGuard)
                      │
-                     └── сам проверяет JWT для остального
+                     └── сам проверяет JWT для остального (например, /api/me)
 ```
 
 **Деплой** — GitHub Actions ([.github/workflows/cd.yml](.github/workflows/cd.yml)) при
-каждом пуше в `main`: собирает Docker-образы `gateway`/`auth`, публикует в `ghcr.io`,
+каждом пуше в `main`: собирает Docker-образы `gateway`/`auth`/`catalog`, публикует в `ghcr.io`,
 собирает и заливает статику `web` по SSH, применяет миграции Prisma отдельным шагом
 (до перезапуска контейнеров), проверяет здоровье после деплоя.
 
@@ -157,7 +162,7 @@ seatlock.fun
 - [x] **00 — Скелет.** Монорепо, Docker, линтеры, CI, health-эндпоинты
 - [x] **01 — Авторизация.** JWT с ротацией refresh, rate limit, React-скелет
 - [x] **06 — Облако.** Свой сервер вместо AWS, Docker Compose, Caddy, полный CD _(раньше по плану — понадобилось для практики DevOps)_
-- [ ] **02 — Каталог.** События, схемы залов, кэш в Redis
+- [x] **02 — Каталог.** Залы, схемы мест, события, роли (ORGANIZER/ADMIN), кэш в Redis
 - [ ] **03 — Бронирование.** Холды с TTL, конкурентность, нагрузочный тест
 - [ ] **04 — Платежи.** Stripe, вебхуки, сага, транзакционный outbox
 - [ ] **05 — Уведомления.** RabbitMQ, PDF с QR, S3, DLQ

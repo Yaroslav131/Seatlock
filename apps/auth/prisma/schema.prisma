@@ -1,5 +1,10 @@
 generator client {
   provider = "prisma-client-js"
+  // auth и catalog используют одинаковую версию @prisma/client — без
+  // своего output pnpm физически делит один и тот же сгенерированный
+  // клиент между сервисами, и чей "prisma generate" выполнился
+  // последним, тот и остаётся (см. docs/adr для деталей, если понадобится).
+  output = "../src/generated/prisma"
 }
 
 datasource db {
