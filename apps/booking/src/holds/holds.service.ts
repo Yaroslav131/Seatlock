@@ -1,4 +1,4 @@
-import { Inject, Injectable } from '@nestjs/common';
+import { Inject, Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import Redis from 'ioredis';
 import { REDIS_CLIENT } from '../redis/redis.module';
@@ -26,6 +26,7 @@ function eventHoldsKey(eventId: string): string {
 
 @Injectable()
 export class HoldsService {
+  private readonly logger = new Logger(HoldsService.name);
   private readonly ttlSeconds: number;
 
   constructor(
@@ -113,6 +114,9 @@ export class HoldsService {
     });
 
     if (orphaned.length > 0) {
+      this.logger.warn(
+        `getHeldSeats: осиротевшие записи индекса для eventId=${eventId}: [${orphaned.join(', ')}] — чищу через zrem`,
+      );
       await this.redis.zrem(key, ...orphaned);
     }
 
@@ -132,6 +136,9 @@ export class HoldsService {
       // Узкое окно: user-hold ещё не протух, а hold: — уже (независимые
       // TTL, читаем не атомарно). Следующий поллинг с фронта увидит
       // актуальное состояние — не страшно для UI с обновлением раз в ~7с.
+      this.logger.warn(
+        `getMyHold: user-hold указывает на seatId=${seatId} для userId=${userId} eventId=${eventId}, но hold:-ключ уже протух (ttl=${ttl}) — отдаю null`,
+      );
       return null;
     }
     return { seatId, expiresAt: new Date(Date.now() + ttl * 1000).toISOString() };
