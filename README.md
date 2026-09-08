@@ -68,6 +68,7 @@ curl http://localhost:3000/health/ready
 | gateway    | 3000        | —                                              |
 | auth       | 3001        | —                                              |
 | catalog    | 3002        | —                                              |
+| booking    | 3003        | —                                              |
 | PostgreSQL | 5433        | —                                              |
 | Redis      | 6380        | —                                              |
 | RabbitMQ   | 5673        | http://localhost:15673 (seatlock / seatlock)   |
@@ -83,7 +84,7 @@ curl http://localhost:3000/health/ready
 | `pnpm build`       | Собирает все пакеты                  |
 | `pnpm lint`        | ESLint по всему монорепозиторию      |
 | `pnpm typecheck`   | Проверка типов без сборки            |
-| `pnpm test`        | Тесты (`auth`, `catalog`)            |
+| `pnpm test`        | Тесты (`auth`, `catalog`, `booking`) |
 | `pnpm format`      | Форматирование Prettier              |
 | `pnpm infra:up`    | Поднимает Docker-инфраструктуру      |
 | `pnpm infra:down`  | Останавливает контейнеры             |
@@ -95,9 +96,10 @@ curl http://localhost:3000/health/ready
 ```
 apps/
   gateway/     единый публичный вход: REST, проверка JWT, rate limit,
-               прозрачный прокси на auth и catalog
+               прозрачный прокси на auth, catalog и booking
   auth/        регистрация, вход, JWT с ротацией refresh-токенов
   catalog/     залы, схемы мест, события, роли, кэш в Redis
+  booking/     холды мест — только в Redis, без своей БД (ADR 0003)
   web/         React-фронтенд (Vite)
 docs/adr/      архитектурные решения и их причины
 docker-compose.yml       локальная инфраструктура для разработки
@@ -113,8 +115,8 @@ Caddyfile                reverse-proxy + автоматический HTTPS в �
 | `auth`         | Пользователи, JWT, ротация refresh, rate limit         | в проде     |
 | `web`          | Фронтенд: вход, регистрация, личный кабинет            | в проде     |
 | `catalog`      | Залы, схемы мест, события, кэш в Redis                 | в проде     |
-| `booking`      | Холды мест, заказы, сага                               | планируется |
-| `payment`      | Stripe, вебхуки, возвраты                              | планируется |
+| `booking`      | Холды мест на время выбора (Redis, ADR 0003)           | в проде     |
+| `payment`      | Заказы, Stripe, вебхуки, возвраты                      | планируется |
 | `notification` | PDF-билеты, письма                                     | планируется |
 
 ## API-документация
@@ -124,9 +126,10 @@ Swagger — отдельно на каждом сервисе, который о
 - [seatlock.fun/api/docs](https://seatlock.fun/api/docs) — `gateway`
 - [seatlock.fun/api/auth/docs](https://seatlock.fun/api/auth/docs) — `auth` (виден через прокси gateway)
 - [seatlock.fun/api/catalog/docs](https://seatlock.fun/api/catalog/docs) — `catalog` (виден через прокси gateway)
+- [seatlock.fun/api/booking/docs](https://seatlock.fun/api/booking/docs) — `booking` (виден через прокси gateway)
 
 Локально — `http://localhost:3000/api/docs`, `http://localhost:3001/api/auth/docs`,
-`http://localhost:3002/api/catalog/docs`.
+`http://localhost:3002/api/catalog/docs`, `http://localhost:3003/api/booking/docs`.
 
 ## Продакшн
 
@@ -144,12 +147,13 @@ seatlock.fun
  │
  └──▶ /api/* ──▶ [ gateway ] ──▶ [ auth ]      (только вход/регистрация)
                      │       ──▶ [ catalog ]   (создание залов/событий — RolesGuard)
+                     │       ──▶ [ booking ]   (холды мест — только Redis, без БД)
                      │
                      └── сам проверяет JWT для остального (например, /api/me)
 ```
 
 **Деплой** — GitHub Actions ([.github/workflows/cd.yml](.github/workflows/cd.yml)) при
-каждом пуше в `main`: собирает Docker-образы `gateway`/`auth`/`catalog`, публикует в `ghcr.io`,
+каждом пуше в `main`: собирает Docker-образы `gateway`/`auth`/`catalog`/`booking`, публикует в `ghcr.io`,
 собирает и заливает статику `web` по SSH, применяет миграции Prisma отдельным шагом
 (до перезапуска контейнеров), проверяет здоровье после деплоя.
 
