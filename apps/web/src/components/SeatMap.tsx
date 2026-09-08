@@ -1,5 +1,5 @@
 import type { JSX } from 'react';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { getHeldSeats, getMyHold, Hold, holdSeat, releaseHold } from '../lib/booking-api';
 import { ApiError } from '../lib/api-client';
@@ -36,12 +36,23 @@ export function SeatMap({ eventId, venueId }: { eventId: string; venueId: string
   const [pendingSeatId, setPendingSeatId] = useState<string | null>(null);
   const [now, setNow] = useState(() => Date.now());
 
+  // Опрос идёт и по таймеру, и сразу после клика (занял/отпустил место) —
+  // если предыдущий запрос завис в сети дольше нового (реальная сеть в
+  // проде не такая ровная, как localhost), его ответ может прийти ПОЗЖЕ
+  // и откатить состояние обратно на устаревшее — именно так отпущенное
+  // место мигало обратно в "занято". refreshSeq — счётчик поколений:
+  // применяем только ответ самого свежего по времени СТАРТА запроса,
+  // а не самого свежего по времени ОТВЕТА.
+  const refreshSeq = useRef(0);
+
   const refreshHolds = useCallback(async () => {
+    const seq = ++refreshSeq.current;
     try {
       const [held, mine] = await Promise.all([
         getHeldSeats(eventId),
         userId ? getMyHold(eventId) : Promise.resolve(null),
       ]);
+      if (seq !== refreshSeq.current) return;
       setHeldSeatIds(new Set(held.map((h) => h.seatId)));
       setMyHold(mine);
     } catch {
@@ -112,7 +123,8 @@ export function SeatMap({ eventId, venueId }: { eventId: string; venueId: string
         // Кто-то опередил между опросами — просто обновляем карту, без баннера ошибки.
         await refreshHolds();
       } else {
-        setError(err instanceof ApiError ? err.message : 'Не удалось занять место');
+        const fallback = status === 'HELD_BY_YOU' ? 'Не удалось отпустить место' : 'Не удалось занять место';
+        setError(err instanceof ApiError ? err.message : fallback);
       }
     } finally {
       setPendingSeatId(null);
