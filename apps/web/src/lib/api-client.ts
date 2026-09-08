@@ -9,6 +9,21 @@ export class ApiError extends Error {
   }
 }
 
+/**
+ * NestJS отдаёт пустое тело (Content-Length: 0) с кодом 200, а не 204,
+ * когда контроллер явно возвращает null — например, GET /my-hold без
+ * активного холда. res.json() на пустом теле падает с SyntaxError
+ * ("Unexpected end of JSON input"), а не отдаёт null — раньше это
+ * ронял весь Promise.all в SeatMap и замораживало карту мест на
+ * последнем успешном состоянии. Читаем как текст и парсим только
+ * непустой ответ — устойчиво к пустому телу при любом статусе,
+ * а не только при 204.
+ */
+async function parseJsonBody<T>(res: Response): Promise<T> {
+  const text = await res.text();
+  return (text ? JSON.parse(text) : undefined) as T;
+}
+
 async function rawFetch(path: string, options: RequestInit = {}): Promise<Response> {
   return fetch(path, {
     ...options,
@@ -84,14 +99,8 @@ export async function authFetch<T>(
     throw new ApiError(body.message ?? `Запрос завершился с ошибкой ${res.status}`, res.status);
   }
 
-  if (res.status === HTTP_NO_CONTENT) {
-    return undefined as T;
-  }
-
-  return (await res.json()) as T;
+  return parseJsonBody<T>(res);
 }
-
-const HTTP_NO_CONTENT = 204;
 
 /** Запрос без авторизации — для register/login, куда токен ещё не нужен. */
 export async function publicFetch<T>(path: string, options: RequestInit = {}): Promise<T> {
@@ -102,5 +111,5 @@ export async function publicFetch<T>(path: string, options: RequestInit = {}): P
     throw new ApiError(body.message ?? `Запрос завершился с ошибкой ${res.status}`, res.status);
   }
 
-  return (await res.json()) as T;
+  return parseJsonBody<T>(res);
 }
