@@ -16,6 +16,8 @@ function createRedisMock() {
     ttl: jest.fn(),
     zrange: jest.fn(),
     zremrangebyscore: jest.fn(),
+    mget: jest.fn(),
+    zrem: jest.fn(),
   };
 }
 
@@ -98,8 +100,9 @@ describe('HoldsService', () => {
   });
 
   describe('getHeldSeats', () => {
-    it('сначала чистит протухшие записи, потом читает список', async () => {
+    it('сначала чистит протухшие по времени записи, потом читает список', async () => {
       redis.zrange.mockResolvedValue(['seat-1', 'seat-2']);
+      redis.mget.mockResolvedValue(['user-1', 'user-2']);
 
       const seats = await service.getHeldSeats('event-1');
 
@@ -110,6 +113,44 @@ describe('HoldsService', () => {
       );
       expect(redis.zrange).toHaveBeenCalledWith('event-holds:event-1', 0, -1);
       expect(seats).toEqual(['seat-1', 'seat-2']);
+    });
+
+    it('не ходит в mget/zrem, если индекс и так пуст', async () => {
+      redis.zrange.mockResolvedValue([]);
+
+      const seats = await service.getHeldSeats('event-1');
+
+      expect(redis.mget).not.toHaveBeenCalled();
+      expect(seats).toEqual([]);
+    });
+
+    it('сверяет каждую запись индекса с реальным hold-ключом через mget', async () => {
+      redis.zrange.mockResolvedValue(['seat-1', 'seat-2']);
+      redis.mget.mockResolvedValue(['user-1', 'user-2']);
+
+      await service.getHeldSeats('event-1');
+
+      expect(redis.mget).toHaveBeenCalledWith('hold:event-1:seat-1', 'hold:event-1:seat-2');
+    });
+
+    it('вычищает из индекса "осиротевшие" места без реального hold-ключа и не отдаёт их наружу', async () => {
+      redis.zrange.mockResolvedValue(['seat-1', 'seat-2', 'seat-3']);
+      // seat-2 есть в индексе, но первичного hold:-ключа для него уже нет — "осиротело".
+      redis.mget.mockResolvedValue(['user-1', null, 'user-3']);
+
+      const seats = await service.getHeldSeats('event-1');
+
+      expect(seats).toEqual(['seat-1', 'seat-3']);
+      expect(redis.zrem).toHaveBeenCalledWith('event-holds:event-1', 'seat-2');
+    });
+
+    it('не зовёт zrem, если осиротевших записей не нашлось', async () => {
+      redis.zrange.mockResolvedValue(['seat-1']);
+      redis.mget.mockResolvedValue(['user-1']);
+
+      await service.getHeldSeats('event-1');
+
+      expect(redis.zrem).not.toHaveBeenCalled();
     });
   });
 
