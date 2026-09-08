@@ -11,6 +11,7 @@ function createPrismaMock() {
     },
     seat: {
       createMany: jest.fn(),
+      findMany: jest.fn(),
     },
   };
 }
@@ -91,6 +92,34 @@ describe('VenuesService', () => {
         NotFoundException,
       );
       expect(prisma.seat.createMany).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('listSeats', () => {
+    it('бросает NotFoundException, если зала нет', async () => {
+      prisma.venue.findUnique.mockResolvedValue(null);
+      await expect(service.listSeats('missing')).rejects.toThrow(NotFoundException);
+      expect(prisma.seat.findMany).not.toHaveBeenCalled();
+    });
+
+    it('отдаёт места зала в отсортированном виде, без лишних полей', async () => {
+      prisma.venue.findUnique.mockResolvedValue({ id: 'v1', _count: { seats: 2 } });
+      prisma.seat.findMany.mockResolvedValue([
+        { id: 's1', section: null, row: 1, number: 1 },
+        { id: 's2', section: null, row: 1, number: 2 },
+      ]);
+
+      const seats = await service.listSeats('v1');
+
+      expect(prisma.seat.findMany).toHaveBeenCalledWith({
+        where: { venueId: 'v1' },
+        orderBy: [{ section: 'asc' }, { row: 'asc' }, { number: 'asc' }],
+        select: { id: true, section: true, row: true, number: true },
+      });
+      expect(seats).toEqual([
+        { id: 's1', section: null, row: 1, number: 1 },
+        { id: 's2', section: null, row: 1, number: 2 },
+      ]);
     });
   });
 });

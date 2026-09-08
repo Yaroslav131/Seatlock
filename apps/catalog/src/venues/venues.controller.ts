@@ -14,6 +14,7 @@ import { Roles } from '../auth/roles.decorator';
 import { RolesGuard } from '../auth/roles.guard';
 import { CreateVenueDto } from './dto/create-venue.dto';
 import { GenerateSeatsDto } from './dto/generate-seats.dto';
+import { SeatResponseDto } from './dto/seat-response.dto';
 import { VenueResponseDto } from './dto/venue-response.dto';
 import { VenuesService } from './venues.service';
 
@@ -45,6 +46,14 @@ export class VenuesController {
   @Get(':id')
   findOne(@Param('id') id: string): Promise<VenueResponseDto> {
     return this.venues.findOne(id);
+  }
+
+  @ApiOperation({ summary: 'Список мест зала — публично, нужен для карты зала при бронировании' })
+  @ApiResponse({ status: 200, type: [SeatResponseDto] })
+  @ApiResponse({ status: 404, description: 'Зал не найден' })
+  @Get(':id/seats')
+  listSeats(@Param('id') id: string): Promise<SeatResponseDto[]> {
+    return this.venues.listSeats(id);
   }
 
   @ApiOperation({ summary: 'Сгенерировать сетку мест ряды × места (организатор/админ)' })

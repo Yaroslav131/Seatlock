@@ -17,6 +17,26 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
 
+    # Нужен только тестам booking (holds.lua.integration.spec.ts) — это
+    # единственный пакет в монорепе, чей тест бьёт в настоящий Redis, а не
+    # мок, потому что сама атомарность холдов живёт внутри Lua-скрипта,
+    # а не в TS-коде (см. docs/adr/0003). Остальные пакеты как гоняли
+    # моки, так и продолжат — реальный Redis им не нужен, просто он
+    # теперь есть рядом.
+    services:
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+
+    env:
+      REDIS_URL: redis://localhost:6379
+
     steps:
       - uses: actions/checkout@v4
 

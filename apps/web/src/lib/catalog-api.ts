@@ -37,6 +37,17 @@ export function listVenues(): Promise<Venue[]> {
   return publicFetch<Venue[]>('/api/catalog/venues');
 }
 
+export interface Seat {
+  id: string;
+  section: string | null;
+  row: number;
+  number: number;
+}
+
+export function listVenueSeats(venueId: string): Promise<Seat[]> {
+  return publicFetch<Seat[]>(`/api/catalog/venues/${venueId}/seats`);
+}
+
 export function listMyEvents(): Promise<Event[]> {
   return authFetch<Event[]>('/api/catalog/events/mine');
 }
