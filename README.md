@@ -101,8 +101,11 @@ curl http://localhost:3000/health/ready
   того же модуля) — настоящая инфраструктура (Postgres/Redis) и
   настоящий HTTP-слой (guards/pipes) через `supertest`, а не мок
   сервиса напрямую. Требует `pnpm infra:up` локально; в CI поднимается
-  сервис-контейнерами. Пример — `holds.lua.integration.spec.ts`
-  в `booking` (реальный Redis, атомарность Lua-скриптов).
+  сервис-контейнерами. Примеры — `holds.lua.integration.spec.ts` и
+  `holds.controller.integration.spec.ts` в `booking` (реальный Redis,
+  атомарность Lua-скриптов и HTTP-слой отдельно), `main.integration.spec.ts`
+  в `gateway` (прокси на фейковый апстрим + `/api/me`, без юнит-слоя —
+  у gateway это единственный тест).
 - **E2E** (Playwright, `packages/e2e`) — чёрный ящик через браузер
   поверх всех реально запущенных сервисов сразу, полные пользовательские
   сценарии.
