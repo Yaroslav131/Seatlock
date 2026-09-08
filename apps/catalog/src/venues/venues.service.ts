@@ -2,6 +2,7 @@ import { Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateVenueDto } from './dto/create-venue.dto';
 import { GenerateSeatsDto } from './dto/generate-seats.dto';
+import { SeatResponseDto } from './dto/seat-response.dto';
 import { VenueResponseDto } from './dto/venue-response.dto';
 
 @Injectable()
@@ -61,5 +62,15 @@ export class VenuesService {
 
     const result = await this.prisma.seat.createMany({ data: seats, skipDuplicates: true });
     return { created: result.count };
+  }
+
+  /** Полный список мест зала — нужен booking-сервису для карты зала. */
+  async listSeats(venueId: string): Promise<SeatResponseDto[]> {
+    await this.findOne(venueId);
+    return this.prisma.seat.findMany({
+      where: { venueId },
+      orderBy: [{ section: 'asc' }, { row: 'asc' }, { number: 'asc' }],
+      select: { id: true, section: true, row: true, number: true },
+    });
   }
 }

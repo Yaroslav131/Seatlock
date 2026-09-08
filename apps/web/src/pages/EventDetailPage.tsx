@@ -1,8 +1,8 @@
 import type { JSX } from 'react';
 import { useEffect, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
+import { SeatMap } from '../components/SeatMap';
 import { Badge } from '../components/ui/Badge';
-import { Button } from '../components/ui/Button';
 import { Card, CardBody } from '../components/ui/Card';
 import { ApiError } from '../lib/api-client';
 import { Event, getEvent, getVenue, Venue } from '../lib/catalog-api';
@@ -41,7 +41,7 @@ export function EventDetailPage(): JSX.Element {
   }
 
   return (
-    <div className="mx-auto max-w-2xl">
+    <div className="mx-auto max-w-4xl">
       <Link to="/" className="text-sm font-medium text-ink-500 hover:text-ink-700">
         ← Ко всем событиям
       </Link>
@@ -76,9 +76,7 @@ export function EventDetailPage(): JSX.Element {
         </CardBody>
       </Card>
 
-      <Button disabled className="mt-8 w-full sm:w-auto">
-        Выбрать место — скоро
-      </Button>
+      <SeatMap eventId={event.id} venueId={event.venueId} />
     </div>
   );
 }

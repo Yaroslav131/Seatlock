@@ -53,6 +53,18 @@ async function bootstrap(): Promise<void> {
     }),
   );
 
+  // booking хранит холды мест только в Redis (см. docs/adr/0003) —
+  // gateway про это не знает и знать не должен, для него это такой же
+  // проксируемый сервис, как и остальные два.
+  const bookingServiceUrl = config.get<string>('BOOKING_SERVICE_URL', 'http://localhost:3003');
+  app.use(
+    createProxyMiddleware({
+      target: bookingServiceUrl,
+      changeOrigin: true,
+      pathFilter: '/api/booking',
+    }),
+  );
+
   // Парсер тела нужен только тем маршрутам, что реально обрабатывает
   // сам gateway — до прокси-путей он не достаёт, т.к. тот уже
   // ответил и не вызывает next().
