@@ -77,11 +77,46 @@ export class HoldsService {
     return code === RELEASE_HOLD_RELEASED ? { type: 'RELEASED' } : { type: 'NO_HOLD' };
   }
 
-  /** ZSET самоочищается прямо на чтении — отдельный cron для протухших записей не нужен. */
+  /**
+   * ZSET — вторичный индекс для дешёвого листинга, а не источник истины
+   * (источник истины — ключи hold:{eventId}:{seatId}). По времени
+   * самоочищается через ZREMRANGEBYSCORE, но на проде реально поймано
+   * место, застрявшее в индексе как занятое при пустом user-hold —
+   * точный триггер (какая именно гонка параллельных запросов от одного
+   * юзера к этому привела) не локализован до конца, но сам симптом
+   * подтверждён напрямую через curl на живых данных на проде.
+   * Раз индекс — это просто кэш поверх первичных ключей, читаем его
+   * осторожно: сверяем каждую запись с реальным hold:-ключом через
+   * MGET и чистим "осиротевшие" записи прямо на чтении, а не доверяем
+   * индексу слепо — это делает систему самовосстанавливающейся
+   * независимо от того, как именно возникло расхождение.
+   */
   async getHeldSeats(eventId: string): Promise<string[]> {
     const key = eventHoldsKey(eventId);
     await this.redis.zremrangebyscore(key, '-inf', `(${Date.now()}`);
-    return this.redis.zrange(key, 0, -1);
+    const seatIds = await this.redis.zrange(key, 0, -1);
+    if (seatIds.length === 0) {
+      return [];
+    }
+
+    const holdKeys = seatIds.map((seatId) => holdKey(eventId, seatId));
+    const holders = await this.redis.mget(...holdKeys);
+
+    const confirmed: string[] = [];
+    const orphaned: string[] = [];
+    seatIds.forEach((seatId, i) => {
+      if (holders[i]) {
+        confirmed.push(seatId);
+      } else {
+        orphaned.push(seatId);
+      }
+    });
+
+    if (orphaned.length > 0) {
+      await this.redis.zrem(key, ...orphaned);
+    }
+
+    return confirmed;
   }
 
   async getMyHold(

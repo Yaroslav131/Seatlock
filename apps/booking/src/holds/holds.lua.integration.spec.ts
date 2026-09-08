@@ -108,4 +108,19 @@ describe('holds Lua-скрипты (реальный Redis)', () => {
     expect(await service.getHeldSeats('event-1')).toEqual(['seat-B']);
     expect(await service.getMyHold('event-1', 'user-2')).not.toBeNull();
   });
+
+  it('самолечится, если ZSET-индекс разошёлся с первичным hold-ключом (поймано на проде)', async () => {
+    // Имитируем ровно то расхождение, что реально обнаружено на проде:
+    // место числится занятым в индексе, но первичного hold:-ключа для
+    // него уже нет — то есть holdSeat/releaseHold тут ни при чём, сама
+    // запись индекса "осиротела" каким-то ещё не до конца локализованным
+    // путём. Пишем это состояние в Redis напрямую, в обход HoldsService.
+    await redis.zadd('event-holds:event-1', Date.now() + 60_000, 'orphaned-seat');
+    await service.createHold('event-1', 'seat-A', 'user-1');
+
+    const held = await service.getHeldSeats('event-1');
+
+    expect(held).toEqual(['seat-A']);
+    expect(await redis.zscore('event-holds:event-1', 'orphaned-seat')).toBeNull();
+  });
 });
