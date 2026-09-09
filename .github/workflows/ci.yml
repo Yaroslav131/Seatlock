@@ -177,12 +177,17 @@ jobs:
           # чем локально — обычных 2 минут не хватает даже на первую
           # строчку вывода. Бюджет пошире, плюс хвост лога каждые 10
           # попыток, чтобы не гадать вслепую, если всё-таки не уложимся.
+          # --max-time — иначе один-единственный порт, который открылся,
+          # но повис до ответа (не успел провалиться, не успел ответить),
+          # блокирует curl навсегда и весь цикл перестаёт быть ограниченным
+          # по времени вообще, несмотря на seq 1 150 — ровно так один раз
+          # уже зависло по-настоящему, а не просто долго молчало.
           for i in $(seq 1 150); do
-            if curl -fs http://localhost:5173/ >/dev/null \
-              && curl -fs http://localhost:3000/health >/dev/null \
-              && curl -fs http://localhost:3001/health >/dev/null \
-              && curl -fs http://localhost:3002/health >/dev/null \
-              && curl -fs http://localhost:3003/health >/dev/null; then
+            if curl -fs --max-time 3 http://localhost:5173/ >/dev/null \
+              && curl -fs --max-time 3 http://localhost:3000/health >/dev/null \
+              && curl -fs --max-time 3 http://localhost:3001/health >/dev/null \
+              && curl -fs --max-time 3 http://localhost:3002/health >/dev/null \
+              && curl -fs --max-time 3 http://localhost:3003/health >/dev/null; then
               echo "весь стек готов после ${i} попыток"
               exit 0
             fi
