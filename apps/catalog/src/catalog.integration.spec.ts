@@ -68,12 +68,10 @@ describe('CatalogController (интеграция, настоящий Nest + н�
     await prisma.seat.deleteMany();
     await prisma.venue.deleteMany();
     await redis.flushdb();
+    // RedisModule реализует OnApplicationShutdown — app.close() сам
+    // корректно закрывает соединение с Redis, отдельный redis.quit()
+    // здесь больше не нужен.
     await app.close();
-    // RedisModule не реализует OnModuleDestroy (в отличие от
-    // PrismaService) — app.close() гасит Nest-приложение, но TCP-
-    // соединение с Redis остаётся открытым и без этого Jest висит
-    // после «Tests: 5 passed», не завершаясь вообще.
-    await redis.quit();
   });
 
   const createVenueDto = { name: 'Дворец спорта', city: 'Минск', address: 'пр. Победителей, 1' };
