@@ -16,6 +16,13 @@
       "dependsOn": ["^build"],
       "env": ["REDIS_URL", "AUTH_DATABASE_URL", "CATALOG_DATABASE_URL"]
     },
+    "test:e2e": {
+      // Не кэшируется и не имеет dependsOn/build-зависимостей — бьёт
+      // по уже поднятому живому стеку (pnpm dev или CI-джоб e2e),
+      // а не по артефактам сборки, так что кэшировать тут нечего.
+      "cache": false,
+      "env": ["E2E_BASE_URL", "E2E_GATEWAY_URL", "AUTH_DATABASE_URL", "JWT_ACCESS_SECRET"]
+    },
     "dev": {
       "cache": false,
       "persistent": true
