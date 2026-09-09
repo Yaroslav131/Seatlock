@@ -98,7 +98,9 @@ jobs:
   e2e:
     name: E2E (Playwright)
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    # Запас под холодную ts-node-компиляцию 4 nest-приложений + Vite
+    # параллельно на раннере — см. комментарий у шага ожидания ниже.
+    timeout-minutes: 20
 
     # Свой job, не шаг в check: поднимает весь стек живьём (5 процессов
     # через pnpm dev), а не отдельные *.spec.ts внутри одного пакета —
@@ -170,7 +172,12 @@ jobs:
 
       - name: Дождаться готовности всех сервисов
         run: |
-          for i in $(seq 1 60); do
+          # На раннере CI холодная компиляция ts-node у 4 nest-приложений
+          # + Vite параллельно (общий CPU, без кэша) заметно медленнее,
+          # чем локально — обычных 2 минут не хватает даже на первую
+          # строчку вывода. Бюджет пошире, плюс хвост лога каждые 10
+          # попыток, чтобы не гадать вслепую, если всё-таки не уложимся.
+          for i in $(seq 1 150); do
             if curl -fs http://localhost:5173/ >/dev/null \
               && curl -fs http://localhost:3000/health >/dev/null \
               && curl -fs http://localhost:3001/health >/dev/null \
@@ -179,9 +186,13 @@ jobs:
               echo "весь стек готов после ${i} попыток"
               exit 0
             fi
-            sleep 2
+            if [ $((i % 10)) -eq 0 ]; then
+              echo "--- попытка ${i}/150, хвост лога стека ---"
+              tail -n 20 /tmp/dev-stack.log || true
+            fi
+            sleep 4
           done
-          echo "стек не поднялся за отведённое время — логи ниже"
+          echo "стек не поднялся за отведённое время — полный лог ниже"
           cat /tmp/dev-stack.log
           exit 1
 
