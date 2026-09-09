@@ -165,24 +165,34 @@ jobs:
           pnpm --filter @seatlock/auth run prisma:deploy
           pnpm --filter @seatlock/catalog run prisma:deploy
 
-      # nest start --watch и vite сами транспилируют на лету — отдельный
-      # шаг сборки перед dev-режимом не нужен, ровно как и локально.
+      # Дев-режим (nest start --watch у 4 nest-приложений + vite сразу
+      # для web) на живом прогоне CI ни разу не выдал ни строчки вывода
+      # даже за 10 минут — холодная ts-node-компиляция четырёх сервисов
+      # разом на общем CPU шарового раннера, судя по всему, попросту не
+      # укладывается в разумное время. Собираем один раз (турбо-кэш это
+      # уже проверенно быстро — см. предыдущие шаги "check"-джоба) и
+      # запускаем готовый dist/ — почти мгновенный старт, ближе к тому,
+      # как сервис поднимается в проде, и не завязан на скорость
+      # компиляции конкретного раннера.
+      - name: Собрать бэкенд и фронтенд
+        run: pnpm build
+
       - name: Запустить весь стек в фоне
-        run: nohup pnpm dev > /tmp/dev-stack.log 2>&1 &
+        run: |
+          nohup node apps/auth/dist/main.js > /tmp/auth.log 2>&1 &
+          nohup node apps/catalog/dist/main.js > /tmp/catalog.log 2>&1 &
+          nohup node apps/booking/dist/main.js > /tmp/booking.log 2>&1 &
+          nohup node apps/gateway/dist/main.js > /tmp/gateway.log 2>&1 &
+          nohup pnpm --filter @seatlock/web exec vite preview --port 5173 --strictPort > /tmp/web.log 2>&1 &
 
       - name: Дождаться готовности всех сервисов
         run: |
-          # На раннере CI холодная компиляция ts-node у 4 nest-приложений
-          # + Vite параллельно (общий CPU, без кэша) заметно медленнее,
-          # чем локально — обычных 2 минут не хватает даже на первую
-          # строчку вывода. Бюджет пошире, плюс хвост лога каждые 10
-          # попыток, чтобы не гадать вслепую, если всё-таки не уложимся.
           # --max-time — иначе один-единственный порт, который открылся,
           # но повис до ответа (не успел провалиться, не успел ответить),
           # блокирует curl навсегда и весь цикл перестаёт быть ограниченным
-          # по времени вообще, несмотря на seq 1 150 — ровно так один раз
+          # по времени вообще, несмотря на seq 1 N — ровно так один раз
           # уже зависло по-настоящему, а не просто долго молчало.
-          for i in $(seq 1 150); do
+          for i in $(seq 1 60); do
             if curl -fs --max-time 3 http://localhost:5173/ >/dev/null \
               && curl -fs --max-time 3 http://localhost:3000/health >/dev/null \
               && curl -fs --max-time 3 http://localhost:3001/health >/dev/null \
@@ -192,13 +202,19 @@ jobs:
               exit 0
             fi
             if [ $((i % 10)) -eq 0 ]; then
-              echo "--- попытка ${i}/150, хвост лога стека ---"
-              tail -n 20 /tmp/dev-stack.log || true
+              echo "--- попытка ${i}/60 ---"
+              for svc in auth catalog booking gateway web; do
+                echo "-- хвост /tmp/${svc}.log --"
+                tail -n 15 "/tmp/${svc}.log" || true
+              done
             fi
-            sleep 4
+            sleep 2
           done
-          echo "стек не поднялся за отведённое время — полный лог ниже"
-          cat /tmp/dev-stack.log
+          echo "стек не поднялся за отведённое время — полные логи ниже"
+          for svc in auth catalog booking gateway web; do
+            echo "===== ${svc} ====="
+            cat "/tmp/${svc}.log" || true
+          done
           exit 1
 
       - name: E2E-тесты
@@ -206,7 +222,11 @@ jobs:
 
       - name: Логи стека (если что-то упало)
         if: failure()
-        run: cat /tmp/dev-stack.log || true
+        run: |
+          for svc in auth catalog booking gateway web; do
+            echo "===== ${svc} ====="
+            cat "/tmp/${svc}.log" || true
+          done
 
       - name: Playwright-трейсы (если что-то упало)
         if: failure()
