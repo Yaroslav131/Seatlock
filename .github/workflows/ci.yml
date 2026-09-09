@@ -17,12 +17,12 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
 
-    # Нужен только тестам booking (holds.lua.integration.spec.ts) — это
-    # единственный пакет в монорепе, чей тест бьёт в настоящий Redis, а не
-    # мок, потому что сама атомарность холдов живёт внутри Lua-скрипта,
-    # а не в TS-коде (см. docs/adr/0003). Остальные пакеты как гоняли
-    # моки, так и продолжат — реальный Redis им не нужен, просто он
-    # теперь есть рядом.
+    # Нужны интеграционным *.integration.spec.ts-тестам (booking, gateway,
+    # auth, catalog) — юнит-тесты на моках их не трогают вообще. Реальная
+    # инфраструктура нужна там, где сама логика живёт не в TS: атомарность
+    # холдов в Lua-скрипте Redis (см. docs/adr/0003), а не мок redis.eval;
+    # RolesGuard/ValidationPipe/ThrottlerGuard на настоящем HTTP-запросе,
+    # а не то, что мок сервиса согласился вернуть.
     services:
       redis:
         image: redis:7-alpine
@@ -34,8 +34,26 @@ jobs:
           --health-timeout 3s
           --health-retries 10
 
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: seatlock
+          POSTGRES_PASSWORD: seatlock
+          POSTGRES_DB: seatlock
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U seatlock -d seatlock"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+
     env:
       REDIS_URL: redis://localhost:6379
+      # Своя схема на каждый сервис в одном и том же инстансе Postgres —
+      # см. docs/adr/0001, тот же приём, что и в .env.example локально.
+      AUTH_DATABASE_URL: postgresql://seatlock:seatlock@localhost:5432/seatlock?schema=auth
+      CATALOG_DATABASE_URL: postgresql://seatlock:seatlock@localhost:5432/seatlock?schema=catalog
 
     steps:
       - uses: actions/checkout@v4
@@ -53,6 +71,14 @@ jobs:
       # сборка падает вместо того, чтобы тихо поставить другие версии.
       - name: Установка зависимостей
         run: pnpm install --frozen-lockfile
+
+      # Отдельным шагом, до pnpm test — иначе auth.integration.spec.ts/
+      # catalog.integration.spec.ts падают на первом же запросе к пустой
+      # базе без таблиц вообще.
+      - name: Применить миграции к тестовым базам
+        run: |
+          pnpm --filter @seatlock/auth run prisma:deploy
+          pnpm --filter @seatlock/catalog run prisma:deploy
 
       - name: Форматирование
         run: pnpm format:check
