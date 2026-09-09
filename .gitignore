@@ -26,3 +26,9 @@ Thumbs.db
 # (см. output в соответствующих schema.prisma), пересоздаётся
 # на каждой установке зависимостей.
 **/src/generated/
+
+# Playwright
+packages/e2e/test-results/
+packages/e2e/playwright-report/
+packages/e2e/blob-report/
+packages/e2e/.cache/
