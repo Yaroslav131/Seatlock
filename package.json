@@ -12,6 +12,7 @@
     "lint": "turbo run lint",
     "typecheck": "turbo run typecheck",
     "test": "turbo run test",
+    "test:e2e": "turbo run test:e2e",
     "format": "prettier --write \"**/*.{ts,js,mjs,json,md,yml,yaml}\"",
     "format:check": "prettier --check \"**/*.{ts,js,mjs,json,md,yml,yaml}\"",
     "infra:up": "docker compose up -d",

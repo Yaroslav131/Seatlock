@@ -1,0 +1,20 @@
+{
+  "name": "@seatlock/e2e",
+  "version": "0.0.0",
+  "private": true,
+  "scripts": {
+    "test:e2e": "playwright test",
+    "test:e2e:headed": "playwright test --headed",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint tests"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.49.0",
+    "@types/jsonwebtoken": "^9.0.7",
+    "@types/node": "^22.10.2",
+    "@types/pg": "^8.11.10",
+    "jsonwebtoken": "^9.0.2",
+    "pg": "^8.13.1",
+    "typescript": "^5.7.2"
+  }
+}

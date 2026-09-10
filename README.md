@@ -78,18 +78,61 @@ curl http://localhost:3000/health/ready
 
 ## Команды
 
-| Команда            | Что делает                           |
-| ------------------ | ------------------------------------ |
-| `pnpm dev`         | Запускает все сервисы в режиме watch |
-| `pnpm build`       | Собирает все пакеты                  |
-| `pnpm lint`        | ESLint по всему монорепозиторию      |
-| `pnpm typecheck`   | Проверка типов без сборки            |
-| `pnpm test`        | Тесты (`auth`, `catalog`, `booking`) |
-| `pnpm format`      | Форматирование Prettier              |
-| `pnpm infra:up`    | Поднимает Docker-инфраструктуру      |
-| `pnpm infra:down`  | Останавливает контейнеры             |
-| `pnpm infra:reset` | Останавливает и **удаляет данные**   |
-| `pnpm infra:logs`  | Логи контейнеров                     |
+| Команда            | Что делает                                 |
+| ------------------ | ------------------------------------------ |
+| `pnpm dev`         | Запускает все сервисы в режиме watch       |
+| `pnpm build`       | Собирает все пакеты                        |
+| `pnpm lint`        | ESLint по всему монорепозиторию            |
+| `pnpm typecheck`   | Проверка типов без сборки                  |
+| `pnpm test`        | Тесты во всех пакетах (юнит + интеграция)  |
+| `pnpm test:e2e`    | Playwright — нужен уже поднятый `pnpm dev` |
+| `pnpm format`      | Форматирование Prettier                    |
+| `pnpm infra:up`    | Поднимает Docker-инфраструктуру            |
+| `pnpm infra:down`  | Останавливает контейнеры                   |
+| `pnpm infra:reset` | Останавливает и **удаляет данные**         |
+| `pnpm infra:logs`  | Логи контейнеров                           |
+
+## Тестирование
+
+Пирамида в три слоя, конвенция едина для всех пакетов:
+
+- **Юнит** (`*.spec.ts`) — чистая логика на моках, без сети и БД. Есть
+  в `auth`/`catalog`/`booking`.
+- **Интеграция** (`*.integration.spec.ts`, лежит рядом с юнит-тестом
+  того же модуля) — настоящая инфраструктура (Postgres/Redis) и
+  настоящий HTTP-слой (guards/pipes) через `supertest`, а не мок
+  сервиса напрямую. Требует `pnpm infra:up` локально; в CI поднимается
+  сервис-контейнерами (плюс отдельный шаг `prisma migrate deploy` для
+  auth/catalog — см. `.github/workflows/ci.yml`). Примеры —
+  `holds.lua.integration.spec.ts` и `holds.controller.integration.spec.ts`
+  в `booking` (реальный Redis, атомарность Lua-скриптов и HTTP-слой
+  отдельно), `main.integration.spec.ts` в `gateway` (прокси на фейковый
+  апстрим + `/api/me`, без юнит-слоя — у gateway это единственный тест),
+  `auth.integration.spec.ts` (реальный Postgres: ротация refresh-токена,
+  массовый отзыв сессий, `ThrottlerGuard` на реальном запросе) и
+  `catalog.integration.spec.ts` (`RolesGuard` + реальная инвалидация
+  Redis-кэша при публикации события).
+- **E2E** (Playwright, `packages/e2e`) — чёрный ящик через браузер
+  поверх всех реально запущенных сервисов сразу, полные пользовательские
+  сценарии: регистрация и восстановление сессии после reload
+  (`auth.spec.ts`), организатор создаёт зал/места/событие и публикует
+  его (`organizer-flow.spec.ts`), бронирование места с немедленным
+  освобождением без ручного refresh (`seat-booking.spec.ts`), и два
+  независимых браузерных контекста, где второй видит место занятым и
+  получает 409 при прямой попытке через API (`seat-booking-two-users.spec.ts`).
+  Требует уже поднятого стека (`pnpm dev` в каждом app, как локально,
+  так и в CI-джобе `e2e`) — сам `playwright.config.ts` его не поднимает.
+  Промоушен в ORGANIZER — только прямой доступ к Postgres
+  (`tests/helpers/promote-organizer.ts`), в интерфейсе для этого
+  сознательно нет кнопки. Фикстуры зала/события в `seat-booking*`
+  подписывают JWT организатора напрямую (`tests/helpers/api-setup.ts`),
+  не регистрируя его через `/api/auth/register` — у этого маршрута
+  свой `ThrottlerGuard` (5 запросов/60с на IP, см. Фазу 4), и настоящая
+  регистрация организатора в каждом тесте параллельного прогона быстро
+  в него упирается.
+
+`web` — Vitest + Testing Library (`apps/web/vitest.config.ts`), тот же
+`pnpm test`, что и у бэкенд-пакетов на jest.
 
 ## Структура
 
@@ -101,6 +144,8 @@ apps/
   catalog/     залы, схемы мест, события, роли, кэш в Redis
   booking/     холды мест — только в Redis, без своей БД (ADR 0003)
   web/         React-фронтенд (Vite)
+packages/
+  e2e/         Playwright — сценарии поверх уже поднятого стека
 docs/adr/      архитектурные решения и их причины
 docker-compose.yml       локальная инфраструктура для разработки
 docker-compose.prod.yml  боевой стек (запускается на сервере)
