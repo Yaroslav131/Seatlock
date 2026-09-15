@@ -31,6 +31,8 @@ jobs:
             dockerfile: apps/catalog/Dockerfile
           - name: booking
             dockerfile: apps/booking/Dockerfile
+          - name: payment
+            dockerfile: apps/payment/Dockerfile
     steps:
       - uses: actions/checkout@v4
 
@@ -124,7 +126,7 @@ jobs:
             git fetch origin main --quiet
             git checkout -B main --quiet FETCH_HEAD
 
-            docker compose -f docker-compose.prod.yml pull auth catalog booking gateway
+            docker compose -f docker-compose.prod.yml pull auth catalog booking payment gateway
 
             # Миграции — отдельным шагом, до запуска новых контейнеров,
             # а не при старте приложения (ADR 0001): несколько параллельных
@@ -133,11 +135,15 @@ jobs:
             # холды живут только в Redis (ADR 0003).
             docker compose -f docker-compose.prod.yml run --rm auth npx prisma migrate deploy
             docker compose -f docker-compose.prod.yml run --rm catalog npx prisma migrate deploy
+            docker compose -f docker-compose.prod.yml run --rm payment npx prisma migrate deploy
 
-            # caddy тоже в списке: сам образ не меняется, но docker compose
+            # rabbitmq — up -d, а не только "pull": сам образ не менялся,
+            # но до этой фазы сервиса вообще не было в docker-compose.prod.yml,
+            # up сам заметит новое описание и создаст контейнер.
+            # caddy аналогично — сам образ не меняется, но docker compose
             # up сам заметит, если поменялось описание сервиса (например,
             # новый volume под статику фронтенда) и пересоздаст только его.
-            docker compose -f docker-compose.prod.yml up -d auth catalog booking gateway caddy
+            docker compose -f docker-compose.prod.yml up -d rabbitmq auth catalog booking payment gateway caddy
             docker image prune -f --filter "label!=keep"
             docker logout ghcr.io >/dev/null
 
@@ -152,7 +158,7 @@ jobs:
             # У сервисов нет опубликованных портов на хост — снаружи виден
             # только Caddy. Проверяем не curl'ом, а собственным Docker
             # HEALTHCHECK каждого контейнера.
-            for name in seatlock-auth-1 seatlock-catalog-1 seatlock-booking-1 seatlock-gateway-1; do
+            for name in seatlock-auth-1 seatlock-catalog-1 seatlock-booking-1 seatlock-payment-1 seatlock-gateway-1; do
               ok=false
               for i in $(seq 1 10); do
                 status=$(docker inspect --format '{{.State.Health.Status}}' "$name")
