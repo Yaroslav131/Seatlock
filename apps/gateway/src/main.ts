@@ -65,6 +65,19 @@ async function bootstrap(): Promise<void> {
     }),
   );
 
+  // payment принимает вебхук от платёжного провайдера и сам проверяет
+  // подпись по сырым байтам тела (см. apps/payment/src/main.ts) —
+  // bodyParser:false у gateway здесь как раз кстати: байты долетают
+  // до payment нетронутыми без какой-либо доп. настройки прокси.
+  const paymentServiceUrl = config.get<string>('PAYMENT_SERVICE_URL', 'http://localhost:3004');
+  app.use(
+    createProxyMiddleware({
+      target: paymentServiceUrl,
+      changeOrigin: true,
+      pathFilter: '/api/payment',
+    }),
+  );
+
   // Парсер тела нужен только тем маршрутам, что реально обрабатывает
   // сам gateway — до прокси-путей он не достаёт, т.к. тот уже
   // ответил и не вызывает next().

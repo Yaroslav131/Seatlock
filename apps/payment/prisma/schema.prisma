@@ -1,0 +1,66 @@
+generator client {
+  provider = "prisma-client-js"
+  // Свой output — иначе делит один и тот же сгенерированный клиент
+  // с auth/catalog (у всех одинаковая версия @prisma/client).
+  output = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("PAYMENT_DATABASE_URL")
+}
+
+enum OrderStatus {
+  PENDING
+  PAID
+  CANCELLED
+  REFUNDED
+}
+
+// eventId/seatId/userId — просто id из JWT/catalog, без внешних
+// ключей: они в других схемах, у других сервисов (тот же принцип,
+// что и organizerId в catalog.Event — целостность на уровне
+// приложения, а не БД).
+//
+// Реальный барьер от двойной продажи — НЕ это поле и не Redis-холд
+// (тот временный, TTL 5 минут), а частичный уникальный индекс
+// ниже, добавленный вручную в migration.sql (Prisma не поддерживает
+// partial unique index через @@unique в schema.prisma):
+//
+//   CREATE UNIQUE INDEX "orders_event_seat_active_key"
+//     ON "payment"."orders" ("eventId", "seatId")
+//     WHERE "status" IN ('PENDING', 'PAID');
+//
+// REFUNDED/CANCELLED сознательно не входят в индекс — место должно
+// снова стать покупаемым.
+model Order {
+  id               String      @id @default(uuid())
+  eventId          String
+  seatId           String
+  userId           String
+  amountCents      Int
+  status           OrderStatus @default(PENDING)
+  providerIntentId String?     @unique
+  providerRefundId String?
+  createdAt        DateTime    @default(now())
+  updatedAt        DateTime    @updatedAt
+
+  @@index([userId])
+  @@map("orders")
+}
+
+// Transactional outbox: смена статуса заказа и запись события,
+// которое нужно опубликовать в RabbitMQ, коммитятся одной Prisma
+// $transaction — нет окна, где платёж прошёл в БД, а событие для
+// notification потерялось (или наоборот). OutboxPublisherService
+// публикует непубликованные строки по расписанию.
+model OutboxEvent {
+  id          String    @id @default(uuid())
+  eventType   String
+  payload     Json
+  createdAt   DateTime  @default(now())
+  publishedAt DateTime?
+
+  @@index([publishedAt])
+  @@map("outbox_events")
+}
