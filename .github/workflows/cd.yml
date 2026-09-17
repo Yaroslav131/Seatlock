@@ -33,6 +33,8 @@ jobs:
             dockerfile: apps/booking/Dockerfile
           - name: payment
             dockerfile: apps/payment/Dockerfile
+          - name: notification
+            dockerfile: apps/notification/Dockerfile
     steps:
       - uses: actions/checkout@v4
 
@@ -116,6 +118,13 @@ jobs:
             set -e
             cd ~/seatlock
 
+            # docker compose сам подставляет ${VAR} из .env при чтении
+            # compose-файла, но обычным shell-командам ниже (mc alias set)
+            # эти переменные не видны, пока не подгрузим .env в самом shell.
+            set -a
+            . ./.env
+            set +a
+
             # Токен GITHUB_TOKEN живёт только время одного запуска workflow —
             # на сервере он нигде не сохраняется постоянно, только на время pull.
             echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USER" --password-stdin
@@ -126,7 +135,7 @@ jobs:
             git fetch origin main --quiet
             git checkout -B main --quiet FETCH_HEAD
 
-            docker compose -f docker-compose.prod.yml pull auth catalog booking payment gateway
+            docker compose -f docker-compose.prod.yml pull auth catalog booking payment notification gateway
 
             # Миграции — отдельным шагом, до запуска новых контейнеров,
             # а не при старте приложения (ADR 0001): несколько параллельных
@@ -136,14 +145,25 @@ jobs:
             docker compose -f docker-compose.prod.yml run --rm auth npx prisma migrate deploy
             docker compose -f docker-compose.prod.yml run --rm catalog npx prisma migrate deploy
             docker compose -f docker-compose.prod.yml run --rm payment npx prisma migrate deploy
+            docker compose -f docker-compose.prod.yml run --rm notification npx prisma migrate deploy
 
-            # rabbitmq — up -d, а не только "pull": сам образ не менялся,
-            # но до этой фазы сервиса вообще не было в docker-compose.prod.yml,
-            # up сам заметит новое описание и создаст контейнер.
+            # rabbitmq/minio — up -d, а не только "pull": сами образы не
+            # менялись, но до этой фазы сервисов вообще не было в
+            # docker-compose.prod.yml, up сам заметит новое описание и
+            # создаст контейнеры.
             # caddy аналогично — сам образ не меняется, но docker compose
             # up сам заметит, если поменялось описание сервиса (например,
             # новый volume под статику фронтенда) и пересоздаст только его.
-            docker compose -f docker-compose.prod.yml up -d rabbitmq auth catalog booking payment gateway caddy
+            docker compose -f docker-compose.prod.yml up -d rabbitmq minio auth catalog booking payment notification gateway caddy
+
+            # Бакет не создаётся сам при первом старте MinIO — идемпотентно
+            # (--ignore-existing, не падает на повторных деплоях), тем же
+            # способом, что и в CI (см. ci.yml): одноразовый контейнер с mc
+            # в той же compose-сети, что и сам minio.
+            docker run --rm --network seatlock_default --entrypoint sh \
+              quay.io/minio/minio:latest -c \
+              "mc alias set local http://minio:9000 seatlock '$MINIO_ROOT_PASSWORD' && mc mb --ignore-existing local/seatlock-tickets"
+
             docker image prune -f --filter "label!=keep"
             docker logout ghcr.io >/dev/null
 
@@ -158,7 +178,7 @@ jobs:
             # У сервисов нет опубликованных портов на хост — снаружи виден
             # только Caddy. Проверяем не curl'ом, а собственным Docker
             # HEALTHCHECK каждого контейнера.
-            for name in seatlock-auth-1 seatlock-catalog-1 seatlock-booking-1 seatlock-payment-1 seatlock-gateway-1; do
+            for name in seatlock-auth-1 seatlock-catalog-1 seatlock-booking-1 seatlock-payment-1 seatlock-notification-1 seatlock-gateway-1; do
               ok=false
               for i in $(seq 1 10); do
                 status=$(docker inspect --format '{{.State.Health.Status}}' "$name")

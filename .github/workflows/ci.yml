@@ -65,6 +65,21 @@ jobs:
           --health-timeout 5s
           --health-retries 10
 
+      # MinIO не поднимаем через services: — у сервис-контейнеров
+      # GitHub Actions нет способа передать команду (только образ,
+      # env, ports, options-флаги), а MinIO без "server /data" в
+      # команде не запускает сервер вообще. Поднимаем сами шагом ниже
+      # через docker run — там команду задать можно.
+
+      # Нужен notification.integration.spec.ts — тест проверяет
+      # реальную доставку письма, а не то, что мок согласился
+      # ответить "успех" (см. apps/notification/src/mail).
+      mailpit:
+        image: axllent/mailpit:latest
+        ports:
+          - 1026:1025
+          - 8026:8025
+
     env:
       REDIS_URL: redis://localhost:6379
       # Своя схема на каждый сервис в одном и том же инстансе Postgres —
@@ -72,7 +87,16 @@ jobs:
       AUTH_DATABASE_URL: postgresql://seatlock:seatlock@localhost:5432/seatlock?schema=auth
       CATALOG_DATABASE_URL: postgresql://seatlock:seatlock@localhost:5432/seatlock?schema=catalog
       PAYMENT_DATABASE_URL: postgresql://seatlock:seatlock@localhost:5432/seatlock?schema=payment
+      NOTIFICATION_DATABASE_URL: postgresql://seatlock:seatlock@localhost:5432/seatlock?schema=notification
       RABBITMQ_URL: amqp://seatlock:seatlock@localhost:5672
+      AUTH_SERVICE_URL: http://localhost:3001
+      CATALOG_SERVICE_URL: http://localhost:3002
+      S3_ENDPOINT: http://localhost:9100
+      S3_ACCESS_KEY: seatlock
+      S3_SECRET_KEY: seatlock123
+      S3_BUCKET: seatlock-tickets
+      SMTP_HOST: localhost
+      SMTP_PORT: 1026
 
     steps:
       - uses: actions/checkout@v4
@@ -91,6 +115,22 @@ jobs:
       - name: Установка зависимостей
         run: pnpm install --frozen-lockfile
 
+      # Нужен notification.integration.spec.ts — тест проверяет
+      # реальную загрузку PDF-билета в S3-совместимое хранилище, а не
+      # то, что мок согласился ответить "успех" (см.
+      # apps/notification/src/tickets/ticket-storage.service.ts).
+      # --network host, а не -p 9100:9000: сервис-контейнеры выше и
+      # обычные "docker run" в раннере GitHub Actions уже в сети host,
+      # публиковать порт заново незачем и было бы конфликтом.
+      - name: Поднять MinIO и создать бакет
+        run: |
+          docker run -d --name minio --network host \
+            -e MINIO_ROOT_USER=seatlock -e MINIO_ROOT_PASSWORD=seatlock123 \
+            quay.io/minio/minio:latest server /data --address :9100
+          curl --retry 20 --retry-delay 2 --retry-connrefused -sf http://localhost:9100/minio/health/live
+          docker run --rm --network host --entrypoint sh quay.io/minio/minio:latest -c \
+            "mc alias set local http://localhost:9100 seatlock seatlock123 && mc mb -p local/seatlock-tickets"
+
       # Отдельным шагом, до pnpm test — иначе auth.integration.spec.ts/
       # catalog.integration.spec.ts падают на первом же запросе к пустой
       # базе без таблиц вообще.
@@ -99,6 +139,7 @@ jobs:
           pnpm --filter @seatlock/auth run prisma:deploy
           pnpm --filter @seatlock/catalog run prisma:deploy
           pnpm --filter @seatlock/payment run prisma:deploy
+          pnpm --filter @seatlock/notification run prisma:deploy
 
       - name: Форматирование
         run: pnpm format:check

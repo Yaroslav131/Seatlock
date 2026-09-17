@@ -65,6 +65,9 @@ export class PaymentWebhookService {
         userId: order.userId,
         eventId: order.eventId,
         seatId: order.seatId,
+        // Нужно notification для PDF-билета/письма — эти данные уже
+        // есть в памяти на этот момент, лишнего похода за ними не надо.
+        amountCents: order.amountCents,
       });
     });
 

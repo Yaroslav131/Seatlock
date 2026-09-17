@@ -1,0 +1,40 @@
+generator client {
+  provider = "prisma-client-js"
+  // Свой output — иначе делит один и тот же сгенерированный клиент
+  // с auth/catalog/payment (у всех одинаковая версия @prisma/client).
+  output = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("NOTIFICATION_DATABASE_URL")
+}
+
+enum NotificationStatus {
+  SENT
+  FAILED
+}
+
+// Журнал отправок — изначально по ADR 0001 планировался в MongoDB
+// (гибкая схема), но реальной потребности в гибкости не возникло:
+// один тип уведомления, фиксированный набор полей. Своя схема в общем
+// Postgres, тот же паттерн, что у auth/catalog/payment — не заводим
+// второй тип БД без явной необходимости.
+model NotificationLog {
+  id           String             @id @default(uuid())
+  orderId      String
+  type         String // "TICKET_EMAIL" — единственный тип пока
+  status       NotificationStatus
+  errorMessage String?
+  pdfKey       String? // ключ объекта в S3, если PDF был загружен
+  createdAt    DateTime           @default(now())
+
+  // Естественный ключ идемпотентности consumer'а: RabbitMQ может
+  // доставить order.paid повторно (redelivery после разрыва
+  // соединения до ack) — не отправлять письмо второй раз. Тот же
+  // принцип, что order.status !== 'PENDING' в payment: состояние
+  // само себя защищает, отдельная таблица "обработанных event id" не
+  // нужна.
+  @@unique([orderId, type])
+  @@map("notification_logs")
+}
