@@ -52,25 +52,8 @@ services:
       timeout: 5s
       retries: 10
 
-  mongo:
-    image: mongo:8
-    container_name: seatlock-mongo
-    restart: unless-stopped
-    environment:
-      MONGO_INITDB_ROOT_USERNAME: seatlock
-      MONGO_INITDB_ROOT_PASSWORD: seatlock
-    ports:
-      - '27018:27017'
-    volumes:
-      - mongodata:/data/db
-    healthcheck:
-      test: ['CMD', 'mongosh', '--quiet', '--eval', "db.adminCommand('ping').ok"]
-      interval: 10s
-      timeout: 5s
-      retries: 10
-
   minio:
-    image: minio/minio:latest
+    image: quay.io/minio/minio:latest
     container_name: seatlock-minio
     restart: unless-stopped
     command: ['server', '/data', '--console-address', ':9001']
@@ -100,5 +83,4 @@ volumes:
   pgdata:
   redisdata:
   rabbitdata:
-  mongodata:
   miniodata:

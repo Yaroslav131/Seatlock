@@ -1,0 +1,40 @@
+import { Injectable } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
+import * as nodemailer from 'nodemailer';
+
+export interface TicketEmail {
+  to: string;
+  eventTitle: string;
+  pdf: Buffer;
+}
+
+@Injectable()
+export class MailService {
+  private readonly transport: nodemailer.Transporter;
+
+  constructor(private readonly config: ConfigService) {
+    // В dev/CI это Mailpit — без TLS и без пароля, SMTP_SECURE/SMTP_USER
+    // не заданы. В проде — Resend (smtp.resend.com:465, логин "resend",
+    // пароль — API-ключ): secure:true и auth обязательны, иначе релей
+    // отклонит соединение.
+    const smtpUser = this.config.get<string>('SMTP_USER');
+    this.transport = nodemailer.createTransport({
+      host: this.config.getOrThrow<string>('SMTP_HOST'),
+      port: this.config.get<number>('SMTP_PORT', 1025),
+      secure: this.config.get<string>('SMTP_SECURE', 'false') === 'true',
+      auth: smtpUser
+        ? { user: smtpUser, pass: this.config.getOrThrow<string>('SMTP_PASSWORD') }
+        : undefined,
+    });
+  }
+
+  async sendTicket(email: TicketEmail): Promise<void> {
+    await this.transport.sendMail({
+      from: 'tickets@seatlock.fun',
+      to: email.to,
+      subject: `Ваш билет: ${email.eventTitle}`,
+      text: `Билет на «${email.eventTitle}» во вложении.`,
+      attachments: [{ filename: 'ticket.pdf', content: email.pdf, contentType: 'application/pdf' }],
+    });
+  }
+}
