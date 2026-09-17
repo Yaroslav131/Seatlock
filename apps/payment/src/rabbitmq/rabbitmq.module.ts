@@ -8,8 +8,16 @@ export const RABBITMQ_CHANNEL = Symbol('RABBITMQ_CHANNEL');
 
 // Первое реальное использование RabbitMQ в проекте — до сих пор он был
 // поднят в docker-compose, но ни один сервис к нему не подключался.
-// Потребителя (notification) пока не существует — outbox просто
-// копит сообщения в durable-очереди, RabbitMQ их не теряет.
+//
+// Exchange сам по себе НИЧЕГО не хранит — маршрутизирует сообщения в
+// очереди по routing key, и если ни одна очередь не привязана
+// (потребителя — notification — пока не существует), сообщение просто
+// теряется, несмотря на durable:true у exchange. durable здесь означает
+// только "exchange переживёт перезапуск брокера как объект", а не
+// "сообщения переживут отсутствие очереди". Реальная защита от тихой
+// потери — mandatory:true при публикации (см. outbox-publisher.service.ts):
+// брокер explicit вернёт недоставленное сообщение обратно, и паблишер
+// хотя бы залогирует это, а не тихо пометит publishedAt.
 export const PAYMENT_EVENTS_EXCHANGE = 'payment.events';
 
 @Global()

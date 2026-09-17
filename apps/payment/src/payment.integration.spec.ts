@@ -205,4 +205,18 @@ describe('payment (интеграция, настоящий Nest + настоя�
     const outboxRow = await prisma.outboxEvent.findFirst({ where: { eventType: 'order.paid' } });
     expect(outboxRow?.publishedAt).not.toBeNull();
   });
+
+  it('outbox-событие, для которого нет привязанной очереди, НЕ помечается опубликованным (mandatory:true ловит потерю)', async () => {
+    // Никакая очередь не привязана к этому routing key — ровно
+    // сегодняшнее состояние проекта: notification ещё не существует.
+    const event = await prisma.outboxEvent.create({
+      data: { eventType: 'nobody.listens.yet', payload: { hello: 'world' } },
+    });
+
+    const publisher = app.get(OutboxPublisherService);
+    await publisher.publishPending();
+
+    const reloaded = await prisma.outboxEvent.findUniqueOrThrow({ where: { id: event.id } });
+    expect(reloaded.publishedAt).toBeNull();
+  });
 });
