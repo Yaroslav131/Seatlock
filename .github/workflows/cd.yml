@@ -161,7 +161,7 @@ jobs:
             # способом, что и в CI (см. ci.yml): одноразовый контейнер с mc
             # в той же compose-сети, что и сам minio.
             docker run --rm --network seatlock_default --entrypoint sh \
-              minio/minio:latest -c \
+              quay.io/minio/minio:latest -c \
               "mc alias set local http://minio:9000 seatlock '$MINIO_ROOT_PASSWORD' && mc mb --ignore-existing local/seatlock-tickets"
 
             docker image prune -f --filter "label!=keep"

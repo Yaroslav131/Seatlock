@@ -126,9 +126,9 @@ jobs:
         run: |
           docker run -d --name minio --network host \
             -e MINIO_ROOT_USER=seatlock -e MINIO_ROOT_PASSWORD=seatlock123 \
-            minio/minio:latest server /data --address :9100
+            quay.io/minio/minio:latest server /data --address :9100
           curl --retry 20 --retry-delay 2 --retry-connrefused -sf http://localhost:9100/minio/health/live
-          docker run --rm --network host --entrypoint sh minio/minio:latest -c \
+          docker run --rm --network host --entrypoint sh quay.io/minio/minio:latest -c \
             "mc alias set local http://localhost:9100 seatlock seatlock123 && mc mb -p local/seatlock-tickets"
 
       # Отдельным шагом, до pnpm test — иначе auth.integration.spec.ts/

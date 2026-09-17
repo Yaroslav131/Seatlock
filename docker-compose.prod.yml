@@ -139,7 +139,7 @@ services:
     # контейнер, а не платное облако (тот же принцип, что и весь
     # остальной стек, см. README "свой сервер вместо AWS"). Тот же
     # образ и healthcheck, что и в dev docker-compose.yml.
-    image: minio/minio:latest
+    image: quay.io/minio/minio:latest
     restart: unless-stopped
     command: ['server', '/data']
     environment:
