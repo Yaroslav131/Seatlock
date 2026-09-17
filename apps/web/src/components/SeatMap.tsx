@@ -149,14 +149,23 @@ export function SeatMap({ eventId, venueId }: { eventId: string; venueId: string
             Место удержано за вами — осталось{' '}
             <span className="font-mono font-semibold">{formatCountdown(countdownMs)}</span>
           </p>
-          <Button
-            variant="secondary"
-            size="sm"
-            loading={pendingSeatId === myHold.seatId}
-            onClick={() => void handleSeatClick(myHold.seatId)}
-          >
-            Отпустить место
-          </Button>
+          <div className="flex shrink-0 gap-2">
+            <Button
+              variant="secondary"
+              size="sm"
+              loading={pendingSeatId === myHold.seatId}
+              onClick={() => void handleSeatClick(myHold.seatId)}
+            >
+              Отпустить место
+            </Button>
+            <Button
+              variant="primary"
+              size="sm"
+              onClick={() => navigate(`/events/${eventId}/checkout?seatId=${myHold.seatId}`)}
+            >
+              Перейти к оплате
+            </Button>
+          </div>
         </div>
       )}
 
