@@ -126,6 +126,20 @@ describe('SeatMap', () => {
     await waitFor(() => expect(seat.className).toContain('bg-brand-600'));
   });
 
+  it('клик по "Перейти к оплате" ведёт на страницу оформления заказа с seatId в query', async () => {
+    vi.mocked(getMyHold).mockResolvedValue({
+      seatId: 'seat-1',
+      expiresAt: new Date(Date.now() + 60_000).toISOString(),
+    });
+
+    render(<SeatMap eventId="event-1" venueId="venue-1" />);
+
+    const payButton = await screen.findByRole('button', { name: 'Перейти к оплате' });
+    fireEvent.click(payButton);
+
+    expect(navigateSpy).toHaveBeenCalledWith('/events/event-1/checkout?seatId=seat-1');
+  });
+
   it('клик по своему месту отпускает его', async () => {
     vi.mocked(getMyHold).mockResolvedValue({
       seatId: 'seat-1',
