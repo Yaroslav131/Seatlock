@@ -13,11 +13,18 @@ export class MailService {
   private readonly transport: nodemailer.Transporter;
 
   constructor(private readonly config: ConfigService) {
-    // Без auth — в dev это Mailpit (локальный SMTP-релей без пароля).
-    // Реальный SMTP-релей для прода — отдельная задача, см. план.
+    // В dev/CI это Mailpit — без TLS и без пароля, SMTP_SECURE/SMTP_USER
+    // не заданы. В проде — Resend (smtp.resend.com:465, логин "resend",
+    // пароль — API-ключ): secure:true и auth обязательны, иначе релей
+    // отклонит соединение.
+    const smtpUser = this.config.get<string>('SMTP_USER');
     this.transport = nodemailer.createTransport({
       host: this.config.getOrThrow<string>('SMTP_HOST'),
       port: this.config.get<number>('SMTP_PORT', 1025),
+      secure: this.config.get<string>('SMTP_SECURE', 'false') === 'true',
+      auth: smtpUser
+        ? { user: smtpUser, pass: this.config.getOrThrow<string>('SMTP_PASSWORD') }
+        : undefined,
     });
   }
 
