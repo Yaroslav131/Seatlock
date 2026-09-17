@@ -136,4 +136,26 @@ describe('AuthController (интеграция, настоящий Nest + нас
     }
     await request(app.getHttpServer()).post('/api/auth/login').send(dto).expect(429);
   });
+
+  it('GET /api/internal/users/:id — отдаёт email без токена (notification вызывает без сессии пользователя)', async () => {
+    // Через prisma напрямую, а не /register — регистрация под общим
+    // ThrottlerGuard (5/60с), а этот тест не про throttling и не
+    // должен зависеть от того, сколько раз register уже вызывался
+    // другими тестами в этом файле.
+    const email = uniqueEmail();
+    const user = await prisma.user.create({
+      data: { email, passwordHash: 'irrelevant-for-this-test' },
+    });
+
+    const res = await request(app.getHttpServer())
+      .get(`/api/internal/users/${user.id}`)
+      .expect(200);
+    expect(res.body).toEqual({ id: user.id, email });
+  });
+
+  it('GET /api/internal/users/:id на несуществующего пользователя — 404', async () => {
+    await request(app.getHttpServer())
+      .get('/api/internal/users/00000000-0000-4000-8000-000000000000')
+      .expect(404);
+  });
 });

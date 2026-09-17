@@ -33,6 +33,12 @@ jobs:
             dockerfile: apps/booking/Dockerfile
           - name: payment
             dockerfile: apps/payment/Dockerfile
+          # Только сборка образа — в docker-compose.prod.yml сервис
+          # пока не заводим (нет реального SMTP-релея/S3-бакета для
+          # прода, см. план notification-сервиса). Деплой — отдельная
+          # задача, когда появится прод-инфраструктура.
+          - name: notification
+            dockerfile: apps/notification/Dockerfile
     steps:
       - uses: actions/checkout@v4
 

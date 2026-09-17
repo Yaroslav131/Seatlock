@@ -36,6 +36,7 @@ const pendingOrder = {
   eventId: 'event-1',
   seatId: 'seat-1',
   userId: 'user-1',
+  amountCents: 150000,
   status: 'PENDING' as const,
   providerIntentId,
 };
@@ -89,7 +90,7 @@ describe('PaymentWebhookService', () => {
     expect(outbox.record).toHaveBeenCalledWith(
       expect.anything(),
       'order.paid',
-      expect.objectContaining({ orderId: pendingOrder.id }),
+      expect.objectContaining({ orderId: pendingOrder.id, amountCents: pendingOrder.amountCents }),
     );
   });
 
