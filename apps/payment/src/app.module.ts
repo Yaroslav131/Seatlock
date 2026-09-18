@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { ScheduleModule } from '@nestjs/schedule';
 import { HealthModule } from './health/health.module';
+import { MetricsModule } from './metrics/metrics.module';
 import { OrdersModule } from './orders/orders.module';
 import { OutboxModule } from './outbox/outbox.module';
 import { PrismaModule } from './prisma/prisma.module';
@@ -15,6 +16,7 @@ import { PaymentWebhookModule } from './webhooks/payment-webhook.module';
     PrismaModule,
     RabbitmqModule,
     HealthModule,
+    MetricsModule,
     OrdersModule,
     PaymentWebhookModule,
     OutboxModule,

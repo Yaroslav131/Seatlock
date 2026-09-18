@@ -1,3 +1,5 @@
+// Первая строка файла — не случайность, см. tracing.ts.
+import './tracing';
 import 'reflect-metadata';
 import { Logger, ValidationPipe } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
@@ -20,7 +22,7 @@ async function bootstrap(): Promise<void> {
   // Без этого req.cookies всегда пустой — refresh-токен едет в cookie,
   // а не в теле запроса.
   app.use(cookieParser());
-  app.setGlobalPrefix('api', { exclude: ['health', 'health/ready'] });
+  app.setGlobalPrefix('api', { exclude: ['health', 'health/ready', 'metrics'] });
   app.useGlobalPipes(
     new ValidationPipe({
       whitelist: true,

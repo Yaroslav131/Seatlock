@@ -13,6 +13,10 @@ export default tseslint.config(
       // Сгенерированный Prisma-клиент — не наш код, не должен
       // проверяться линтером (это минифицированный рантайм).
       '**/src/generated/**',
+      // k6-скрипты выполняются в собственном JS-рантайме (Goja), не в
+      // Node — глобалы вроде __ENV там объявляет сам k6, обычный eslint
+      // это не знает и не должен (см. packages/load-test/README.md).
+      'packages/load-test/**',
     ],
   },
   js.configs.recommended,

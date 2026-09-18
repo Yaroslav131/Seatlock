@@ -4,6 +4,7 @@ import { GetObjectCommand, S3Client } from '@aws-sdk/client-s3';
 import * as amqp from 'amqplib';
 import * as http from 'node:http';
 import type { AddressInfo } from 'node:net';
+import request from 'supertest';
 import { AppModule } from './app.module';
 import { PrismaService } from './prisma/prisma.service';
 import { NOTIFICATION_DLQ, PAYMENT_EVENTS_EXCHANGE } from './rabbitmq/rabbitmq.module';
@@ -222,5 +223,11 @@ describe('notification (интеграция, настоящий Nest + Postgres
       }),
     );
     expect(log.status).toBe('FAILED');
+  });
+
+  it('GET /metrics — отдаёт метрики в формате Prometheus', async () => {
+    const res = await request(app.getHttpServer()).get('/metrics').expect(200);
+    expect(res.headers['content-type']).toMatch(/^text\/plain/);
+    expect(res.text).toContain('# TYPE order_paid_processed_total counter');
   });
 });
