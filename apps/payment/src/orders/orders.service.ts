@@ -22,6 +22,7 @@ interface MyHold {
 interface CatalogEvent {
   status: string;
   basePriceCents: number;
+  organizerId: string;
 }
 
 const CURRENCY = 'usd';
@@ -102,6 +103,28 @@ export class OrdersService {
     });
 
     return { order: updated, clientSecret };
+  }
+
+  /**
+   * ORGANIZER видит заказы только своего события (сверяем organizerId из
+   * catalog — payment сам его не хранит), ADMIN — любого. Та же живая
+   * проверка через catalog, что уже делает create() при создании заказа.
+   */
+  async listByEvent(eventId: string, user: AuthenticatedUser): Promise<Order[]> {
+    const event = await this.fetchEvent(eventId);
+    if (user.role !== 'ADMIN' && event.organizerId !== user.sub) {
+      throw new ForbiddenException('Это не ваше событие');
+    }
+    return this.prisma.order.findMany({ where: { eventId }, orderBy: { createdAt: 'desc' } });
+  }
+
+  /** Публично, для карты зала — тот же принцип, что и HoldsController.listHeld в booking. */
+  async listSoldSeatIds(eventId: string): Promise<string[]> {
+    const orders = await this.prisma.order.findMany({
+      where: { eventId, status: 'PAID' },
+      select: { seatId: true },
+    });
+    return orders.map((order) => order.seatId);
   }
 
   async refund(orderId: string): Promise<Order> {

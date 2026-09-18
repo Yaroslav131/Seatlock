@@ -27,17 +27,15 @@ process.env.RABBITMQ_URL ??= 'amqp://seatlock:seatlock@localhost:5673';
 process.env.JWT_ACCESS_SECRET ??= 'test-secret-for-payment-integration';
 process.env.PAYMENT_PROVIDER ??= 'fake';
 
-function signToken(sub: string): string {
-  return jwt.sign(
-    { sub, email: `${sub}@seatlock.fun`, role: 'USER' },
-    process.env.JWT_ACCESS_SECRET!,
-    { expiresIn: '15m' },
-  );
+function signToken(sub: string, role: 'USER' | 'ORGANIZER' | 'ADMIN' = 'USER'): string {
+  return jwt.sign({ sub, email: `${sub}@seatlock.fun`, role }, process.env.JWT_ACCESS_SECRET!, {
+    expiresIn: '15m',
+  });
 }
 
 interface UpstreamState {
   hold: { seatId: string; expiresAt: string } | null;
-  event: { status: string; basePriceCents: number };
+  event: { status: string; basePriceCents: number; organizerId: string };
 }
 
 describe('payment (интеграция, настоящий Nest + настоящий Postgres + RabbitMQ)', () => {
@@ -100,7 +98,7 @@ describe('payment (интеграция, настоящий Nest + настоя�
   beforeEach(async () => {
     upstreamState = {
       hold: { seatId, expiresAt: new Date(Date.now() + 5 * 60_000).toISOString() },
-      event: { status: 'PUBLISHED', basePriceCents: 150000 },
+      event: { status: 'PUBLISHED', basePriceCents: 150000, organizerId: 'organizer-1' },
     };
     releaseHoldCalls = 0;
     await prisma.outboxEvent.deleteMany();
@@ -189,6 +187,13 @@ describe('payment (интеграция, настоящий Nest + настоя�
     expect(order.status).toBe('PAID');
     expect(releaseHoldCalls).toBe(1);
 
+    // Публичный эндпоинт для карты зала — то же место должно теперь
+    // считаться проданным.
+    const soldRes = await request(app.getHttpServer())
+      .get(`/api/payment/events/${eventId}/sold-seats`)
+      .expect(200);
+    expect(soldRes.body).toEqual([{ seatId }]);
+
     // Паблишер публикует по расписанию (@Interval, см.
     // outbox-publisher.service.ts) — в тесте не ждём реальные 5 секунд,
     // дёргаем тот же метод напрямую, ровно как это сделал бы тик таймера.
@@ -204,6 +209,57 @@ describe('payment (интеграция, настоящий Nest + настоя�
 
     const outboxRow = await prisma.outboxEvent.findFirst({ where: { eventType: 'order.paid' } });
     expect(outboxRow?.publishedAt).not.toBeNull();
+  });
+
+  it('GET /orders: владелец события видит заказ, чужой организатор — 403, после refund статус меняется', async () => {
+    const buyerToken = signToken('buyer-1');
+    const createRes = await request(app.getHttpServer())
+      .post('/api/payment/orders')
+      .set('Authorization', `Bearer ${buyerToken}`)
+      .send({ eventId, seatId })
+      .expect(201);
+    const { id: orderId, providerIntentId } = createRes.body as {
+      id: string;
+      providerIntentId: string;
+    };
+    await request(app.getHttpServer())
+      .post('/api/payment/dev/fake-webhook')
+      .send({ providerIntentId, type: 'payment.succeeded' })
+      .expect(200);
+
+    // upstreamState.event.organizerId === 'organizer-1' (см. beforeEach).
+    const ownerToken = signToken('organizer-1', 'ORGANIZER');
+    const otherOrganizerToken = signToken('organizer-2', 'ORGANIZER');
+    const adminToken = signToken('admin-1', 'ADMIN');
+
+    const ownerRes = await request(app.getHttpServer())
+      .get(`/api/payment/orders?eventId=${eventId}`)
+      .set('Authorization', `Bearer ${ownerToken}`)
+      .expect(200);
+    expect(ownerRes.body).toEqual([expect.objectContaining({ id: orderId, status: 'PAID' })]);
+
+    await request(app.getHttpServer())
+      .get(`/api/payment/orders?eventId=${eventId}`)
+      .set('Authorization', `Bearer ${otherOrganizerToken}`)
+      .expect(403);
+
+    await request(app.getHttpServer())
+      .get(`/api/payment/orders?eventId=${eventId}`)
+      .set('Authorization', `Bearer ${adminToken}`)
+      .expect(200);
+
+    await request(app.getHttpServer())
+      .patch(`/api/payment/orders/${orderId}/refund`)
+      .set('Authorization', `Bearer ${ownerToken}`)
+      .expect(200);
+
+    const afterRefund = await request(app.getHttpServer())
+      .get(`/api/payment/orders?eventId=${eventId}`)
+      .set('Authorization', `Bearer ${ownerToken}`)
+      .expect(200);
+    expect(afterRefund.body).toEqual([
+      expect.objectContaining({ id: orderId, status: 'REFUNDED' }),
+    ]);
   });
 
   it('outbox-событие, для которого нет привязанной очереди, НЕ помечается опубликованным (mandatory:true ловит потерю)', async () => {

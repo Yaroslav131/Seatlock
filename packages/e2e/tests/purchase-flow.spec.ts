@@ -28,4 +28,9 @@ test('полный цикл покупки: занял место → оплат
   await page.getByRole('button', { name: 'Оплатить' }).click();
 
   await expect(page.getByText(/Оплата прошла успешно/)).toBeVisible();
+
+  // Место должно остаться постоянно проданным, а не снова стать
+  // свободным после того, как payment погасил Redis-холд покупателя.
+  await page.goto(`/events/${fixture.eventId}`);
+  await expect(seatButton).toBeDisabled();
 });
