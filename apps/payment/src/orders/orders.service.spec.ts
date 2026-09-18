@@ -8,7 +8,7 @@ import { OrdersService } from './orders.service';
 
 function createPrismaMock() {
   return {
-    order: { create: jest.fn(), update: jest.fn(), findUnique: jest.fn() },
+    order: { create: jest.fn(), update: jest.fn(), findUnique: jest.fn(), findMany: jest.fn() },
   };
 }
 
@@ -154,6 +154,20 @@ describe('OrdersService', () => {
         ConflictException,
       );
       expect(provider.createPaymentIntent).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('listSoldSeatIds', () => {
+    it('возвращает seatId только заказов в статусе PAID', async () => {
+      prisma.order.findMany.mockResolvedValue([{ seatId: 'seat-1' }, { seatId: 'seat-2' }]);
+
+      const result = await service.listSoldSeatIds(eventId);
+
+      expect(prisma.order.findMany).toHaveBeenCalledWith({
+        where: { eventId, status: 'PAID' },
+        select: { seatId: true },
+      });
+      expect(result).toEqual(['seat-1', 'seat-2']);
     });
   });
 });
