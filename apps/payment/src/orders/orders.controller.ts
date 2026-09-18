@@ -1,4 +1,4 @@
-import { Body, Controller, Param, Patch, Post, Req, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, Param, Patch, Post, Query, Req, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
 import type { Request } from 'express';
 import { AuthenticatedUser } from '../auth/jwt-auth.guard';
@@ -47,6 +47,28 @@ export class OrdersController {
       providerIntentId: order.providerIntentId,
       clientSecret,
     };
+  }
+
+  @ApiOperation({ summary: 'Заказы события (организатор своего события, админ — любого)' })
+  @ApiBearerAuth()
+  @ApiResponse({ status: 200, type: [OrderResponseDto] })
+  @ApiResponse({ status: 403, description: 'Событие принадлежит другому организатору' })
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('ORGANIZER', 'ADMIN')
+  @Get()
+  async list(
+    @Query('eventId') eventId: string,
+    @CurrentUser() user: AuthenticatedUser,
+  ): Promise<OrderResponseDto[]> {
+    const orders = await this.orders.listByEvent(eventId, user);
+    return orders.map((order) => ({
+      id: order.id,
+      eventId: order.eventId,
+      seatId: order.seatId,
+      amountCents: order.amountCents,
+      status: order.status,
+      providerIntentId: order.providerIntentId,
+    }));
   }
 
   @ApiOperation({ summary: 'Вернуть оплаченный заказ (организатор/админ)' })

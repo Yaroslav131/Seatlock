@@ -8,7 +8,12 @@ import { OrdersService } from './orders.service';
 
 function createPrismaMock() {
   return {
-    order: { create: jest.fn(), update: jest.fn(), findUnique: jest.fn(), findMany: jest.fn() },
+    order: {
+      create: jest.fn(),
+      update: jest.fn(),
+      findUnique: jest.fn(),
+      findMany: jest.fn(),
+    },
   };
 }
 
@@ -154,6 +159,57 @@ describe('OrdersService', () => {
         ConflictException,
       );
       expect(provider.createPaymentIntent).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('listByEvent', () => {
+    const organizer: AuthenticatedUser = {
+      sub: 'org-1',
+      email: 'o@seatlock.fun',
+      role: 'ORGANIZER',
+    };
+    const admin: AuthenticatedUser = { sub: 'admin-1', email: 'a@seatlock.fun', role: 'ADMIN' };
+    const orders = [{ id: 'order-1', eventId, seatId, status: 'PAID' }];
+
+    it('ORGANIZER — своё событие, видит заказы', async () => {
+      mockEventResponse({
+        status: 'PUBLISHED',
+        basePriceCents: 150000,
+        organizerId: organizer.sub,
+      });
+      prisma.order.findMany.mockResolvedValue(orders);
+
+      const result = await service.listByEvent(eventId, organizer);
+
+      expect(result).toEqual(orders);
+      expect(prisma.order.findMany).toHaveBeenCalledWith({
+        where: { eventId },
+        orderBy: { createdAt: 'desc' },
+      });
+    });
+
+    it('ORGANIZER — чужое событие, 403, к БД не ходим', async () => {
+      mockEventResponse({
+        status: 'PUBLISHED',
+        basePriceCents: 150000,
+        organizerId: 'other-organizer',
+      });
+
+      await expect(service.listByEvent(eventId, organizer)).rejects.toThrow(ForbiddenException);
+      expect(prisma.order.findMany).not.toHaveBeenCalled();
+    });
+
+    it('ADMIN — видит заказы любого события, даже не своего', async () => {
+      mockEventResponse({
+        status: 'PUBLISHED',
+        basePriceCents: 150000,
+        organizerId: 'someone-else',
+      });
+      prisma.order.findMany.mockResolvedValue(orders);
+
+      const result = await service.listByEvent(eventId, admin);
+
+      expect(result).toEqual(orders);
     });
   });
 
