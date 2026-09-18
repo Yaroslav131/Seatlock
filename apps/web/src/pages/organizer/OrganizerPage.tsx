@@ -19,6 +19,7 @@ import {
   Venue,
 } from '../../lib/catalog-api';
 import { formatDateTime, formatPrice } from '../../lib/format';
+import { EventOrdersPanel } from './EventOrdersPanel';
 import { VenueRow } from './VenueRow';
 
 const statusTone = { DRAFT: 'warning', PUBLISHED: 'success', CANCELLED: 'neutral' } as const;
@@ -28,6 +29,7 @@ export function OrganizerPage(): JSX.Element {
   const [venues, setVenues] = useState<Venue[]>([]);
   const [events, setEvents] = useState<Event[]>([]);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [openOrdersFor, setOpenOrdersFor] = useState<Set<string>>(new Set());
 
   useEffect(() => {
     Promise.all([listVenues(), listMyEvents()])
@@ -49,6 +51,18 @@ export function OrganizerPage(): JSX.Element {
     if (updated) {
       setEvents((prev) => prev.map((e) => (e.id === id ? updated : e)));
     }
+  }
+
+  function toggleOrders(eventId: string): void {
+    setOpenOrdersFor((prev) => {
+      const next = new Set(prev);
+      if (next.has(eventId)) {
+        next.delete(eventId);
+      } else {
+        next.add(eventId);
+      }
+      return next;
+    });
   }
 
   return (
@@ -90,21 +104,29 @@ export function OrganizerPage(): JSX.Element {
           ) : (
             <ul className="mt-3 divide-y divide-ink-100">
               {events.map((event) => (
-                <li key={event.id} className="flex items-center justify-between gap-3 py-3">
-                  <div>
-                    <p className="font-medium text-ink-900">{event.title}</p>
-                    <p className="text-sm text-ink-500">
-                      {formatDateTime(event.startsAt)} · {formatPrice(event.basePriceCents)}
-                    </p>
-                  </div>
-                  <div className="flex items-center gap-3">
-                    <Badge tone={statusTone[event.status]}>{statusLabel[event.status]}</Badge>
-                    {event.status === 'DRAFT' && (
-                      <Button size="sm" onClick={() => handlePublish(event.id)}>
-                        Опубликовать
+                <li key={event.id} className="py-3">
+                  <div className="flex items-center justify-between gap-3">
+                    <div>
+                      <p className="font-medium text-ink-900">{event.title}</p>
+                      <p className="text-sm text-ink-500">
+                        {formatDateTime(event.startsAt)} · {formatPrice(event.basePriceCents)}
+                      </p>
+                    </div>
+                    <div className="flex items-center gap-3">
+                      <Badge tone={statusTone[event.status]}>{statusLabel[event.status]}</Badge>
+                      {event.status === 'DRAFT' && (
+                        <Button size="sm" onClick={() => handlePublish(event.id)}>
+                          Опубликовать
+                        </Button>
+                      )}
+                      <Button variant="secondary" size="sm" onClick={() => toggleOrders(event.id)}>
+                        {openOrdersFor.has(event.id) ? 'Скрыть заказы' : 'Заказы'}
                       </Button>
-                    )}
+                    </div>
                   </div>
+                  {openOrdersFor.has(event.id) && (
+                    <EventOrdersPanel eventId={event.id} venueId={event.venueId} />
+                  )}
                 </li>
               ))}
             </ul>
