@@ -189,6 +189,13 @@ describe('payment (интеграция, настоящий Nest + настоя�
     expect(order.status).toBe('PAID');
     expect(releaseHoldCalls).toBe(1);
 
+    // Публичный эндпоинт для карты зала — то же место должно теперь
+    // считаться проданным.
+    const soldRes = await request(app.getHttpServer())
+      .get(`/api/payment/events/${eventId}/sold-seats`)
+      .expect(200);
+    expect(soldRes.body).toEqual([{ seatId }]);
+
     // Паблишер публикует по расписанию (@Interval, см.
     // outbox-publisher.service.ts) — в тесте не ждём реальные 5 секунд,
     // дёргаем тот же метод напрямую, ровно как это сделал бы тик таймера.

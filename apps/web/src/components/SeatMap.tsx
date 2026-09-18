@@ -4,6 +4,7 @@ import { useNavigate } from 'react-router-dom';
 import { getHeldSeats, getMyHold, Hold, holdSeat, releaseHold } from '../lib/booking-api';
 import { ApiError } from '../lib/api-client';
 import { listVenueSeats, Seat } from '../lib/catalog-api';
+import { getSoldSeats } from '../lib/payment-api';
 import { useCurrentUser } from '../lib/auth-store';
 import { Alert } from './ui/Alert';
 import { Button } from './ui/Button';
@@ -11,7 +12,7 @@ import { cn } from '../lib/cn';
 
 const POLL_INTERVAL_MS = 7000;
 
-type SeatStatus = 'AVAILABLE' | 'HELD_BY_YOU' | 'HELD_BY_OTHER';
+type SeatStatus = 'AVAILABLE' | 'HELD_BY_YOU' | 'HELD_BY_OTHER' | 'SOLD';
 
 function formatCountdown(msRemaining: number): string {
   const totalSeconds = Math.max(0, Math.floor(msRemaining / 1000));
@@ -31,6 +32,7 @@ export function SeatMap({ eventId, venueId }: { eventId: string; venueId: string
 
   const [seats, setSeats] = useState<Seat[]>([]);
   const [heldSeatIds, setHeldSeatIds] = useState<Set<string>>(new Set());
+  const [soldSeatIds, setSoldSeatIds] = useState<Set<string>>(new Set());
   const [myHold, setMyHold] = useState<Hold | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [pendingSeatId, setPendingSeatId] = useState<string | null>(null);
@@ -48,12 +50,14 @@ export function SeatMap({ eventId, venueId }: { eventId: string; venueId: string
   const refreshHolds = useCallback(async () => {
     const seq = ++refreshSeq.current;
     try {
-      const [held, mine] = await Promise.all([
+      const [held, sold, mine] = await Promise.all([
         getHeldSeats(eventId),
+        getSoldSeats(eventId),
         userId ? getMyHold(eventId) : Promise.resolve(null),
       ]);
       if (seq !== refreshSeq.current) return;
       setHeldSeatIds(new Set(held.map((h) => h.seatId)));
+      setSoldSeatIds(new Set(sold.map((s) => s.seatId)));
       setMyHold(mine);
     } catch {
       // Поллинг молча пробует ещё раз через POLL_INTERVAL_MS — не хотим
@@ -94,6 +98,11 @@ export function SeatMap({ eventId, venueId }: { eventId: string; venueId: string
   }, [seats]);
 
   function statusOf(seatId: string): SeatStatus {
+    // SOLD раньше HELD_BY_YOU/heldSeatIds — продажа постоянна, а холд
+    // на уже проданное место может быть просто устаревшим (payment
+    // гасит Redis-холд покупателя при оплате, но не мгновенно у всех
+    // остальных клиентов, которые ещё не переопросили booking).
+    if (soldSeatIds.has(seatId)) return 'SOLD';
     if (myHold?.seatId === seatId) return 'HELD_BY_YOU';
     if (heldSeatIds.has(seatId)) return 'HELD_BY_OTHER';
     return 'AVAILABLE';
@@ -105,7 +114,7 @@ export function SeatMap({ eventId, venueId }: { eventId: string; venueId: string
       return;
     }
     const status = statusOf(seatId);
-    if (status === 'HELD_BY_OTHER' || pendingSeatId) return;
+    if (status === 'HELD_BY_OTHER' || status === 'SOLD' || pendingSeatId) return;
 
     setError(null);
     setPendingSeatId(seatId);
@@ -179,6 +188,9 @@ export function SeatMap({ eventId, venueId }: { eventId: string; venueId: string
         <span className="flex items-center gap-1.5">
           <span className="h-3 w-3 rounded bg-ink-300" /> занято
         </span>
+        <span className="flex items-center gap-1.5">
+          <span className="h-3 w-3 rounded bg-ink-500" /> продано
+        </span>
       </div>
 
       {seats.length === 0 && !error && <p className="mt-4 text-sm text-ink-400">Загрузка карты зала…</p>}
@@ -200,7 +212,9 @@ export function SeatMap({ eventId, venueId }: { eventId: string; venueId: string
                           key={seat.id}
                           type="button"
                           title={`Ряд ${seat.row}, место ${seat.number}`}
-                          disabled={status === 'HELD_BY_OTHER' || pendingSeatId === seat.id}
+                          disabled={
+                            status === 'HELD_BY_OTHER' || status === 'SOLD' || pendingSeatId === seat.id
+                          }
                           onClick={() => void handleSeatClick(seat.id)}
                           className={cn(
                             'flex h-7 w-7 shrink-0 items-center justify-center rounded text-[10px] font-medium transition-colors',
@@ -208,6 +222,7 @@ export function SeatMap({ eventId, venueId }: { eventId: string; venueId: string
                               'border border-ink-300 bg-white text-ink-600 hover:border-brand-500 hover:text-brand-600',
                             status === 'HELD_BY_YOU' && 'bg-brand-600 text-white',
                             status === 'HELD_BY_OTHER' && 'cursor-not-allowed bg-ink-200 text-ink-400',
+                            status === 'SOLD' && 'cursor-not-allowed bg-ink-500 text-white',
                             pendingSeatId === seat.id && 'opacity-60',
                           )}
                         >

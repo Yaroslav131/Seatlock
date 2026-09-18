@@ -104,6 +104,15 @@ export class OrdersService {
     return { order: updated, clientSecret };
   }
 
+  /** Публично, для карты зала — тот же принцип, что и HoldsController.listHeld в booking. */
+  async listSoldSeatIds(eventId: string): Promise<string[]> {
+    const orders = await this.prisma.order.findMany({
+      where: { eventId, status: 'PAID' },
+      select: { seatId: true },
+    });
+    return orders.map((order) => order.seatId);
+  }
+
   async refund(orderId: string): Promise<Order> {
     const order = await this.prisma.order.findUnique({ where: { id: orderId } });
     if (!order) {

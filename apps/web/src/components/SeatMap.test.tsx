@@ -19,6 +19,9 @@ vi.mock('../lib/booking-api', () => ({
 vi.mock('../lib/catalog-api', () => ({
   listVenueSeats: vi.fn(),
 }));
+vi.mock('../lib/payment-api', () => ({
+  getSoldSeats: vi.fn(),
+}));
 vi.mock('../lib/auth-store', () => ({
   useCurrentUser: vi.fn(),
 }));
@@ -29,6 +32,7 @@ vi.mock('react-router-dom', () => ({
 import { useCurrentUser } from '../lib/auth-store';
 import { getHeldSeats, getMyHold, Hold, holdSeat, releaseHold } from '../lib/booking-api';
 import { listVenueSeats, Seat } from '../lib/catalog-api';
+import { getSoldSeats } from '../lib/payment-api';
 import { useNavigate } from 'react-router-dom';
 
 const ORGANIZER_USER: DecodedAccessToken = {
@@ -58,6 +62,7 @@ describe('SeatMap', () => {
     vi.mocked(useCurrentUser).mockReturnValue(ORGANIZER_USER);
     vi.mocked(listVenueSeats).mockResolvedValue(ONE_SEAT);
     vi.mocked(getHeldSeats).mockResolvedValue([]);
+    vi.mocked(getSoldSeats).mockResolvedValue([]);
     vi.mocked(getMyHold).mockResolvedValue(null);
   });
 
@@ -138,6 +143,33 @@ describe('SeatMap', () => {
     fireEvent.click(payButton);
 
     expect(navigateSpy).toHaveBeenCalledWith('/events/event-1/checkout?seatId=seat-1');
+  });
+
+  it('проданное место (getSoldSeats) рендерится задизейбленным, клик по нему ничего не делает', async () => {
+    vi.mocked(getSoldSeats).mockResolvedValue([{ seatId: 'seat-1' }]);
+
+    render(<SeatMap eventId="event-1" venueId="venue-1" />);
+
+    const seat = await screen.findByTitle('Ряд 1, место 1');
+    await waitFor(() => expect(seat).toBeDisabled());
+    expect(seat.className).toContain('bg-ink-500');
+
+    fireEvent.click(seat);
+    expect(holdSeat).not.toHaveBeenCalled();
+  });
+
+  it('проданное место приоритетнее устаревшего холда (свой же холд на уже проданное место)', async () => {
+    vi.mocked(getSoldSeats).mockResolvedValue([{ seatId: 'seat-1' }]);
+    vi.mocked(getMyHold).mockResolvedValue({
+      seatId: 'seat-1',
+      expiresAt: new Date(Date.now() + 60_000).toISOString(),
+    });
+
+    render(<SeatMap eventId="event-1" venueId="venue-1" />);
+
+    const seat = await screen.findByTitle('Ряд 1, место 1');
+    await waitFor(() => expect(seat.className).toContain('bg-ink-500'));
+    expect(seat).toBeDisabled();
   });
 
   it('клик по своему месту отпускает его', async () => {
