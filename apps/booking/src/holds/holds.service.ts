@@ -1,6 +1,7 @@
 import { Inject, Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import Redis from 'ioredis';
+import { holdAttemptsTotal } from '../metrics/business-metrics';
 import { REDIS_CLIENT } from '../redis/redis.module';
 import {
   CREATE_HOLD_SCRIPT,
@@ -59,8 +60,10 @@ export class HoldsService {
     );
 
     if (code === CREATE_HOLD_TAKEN) {
+      holdAttemptsTotal.inc({ result: 'conflict' });
       return { type: 'TAKEN' };
     }
+    holdAttemptsTotal.inc({ result: 'ok' });
     return {
       type: 'HELD',
       seatId,

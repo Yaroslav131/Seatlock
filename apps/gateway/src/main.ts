@@ -1,3 +1,10 @@
+// Первая строка файла — не случайность: инструментации OpenTelemetry
+// (http/fetch/amqplib) патчат модули Node ДО того, как их кто-либо
+// успеет импортировать. Проект компилируется в CommonJS (см.
+// tsconfig.base.json), поэтому require() выполняется строго в порядке
+// написанных import — если tracing.ts не первый, часть спанов первых
+// же запросов может не попасть под инструментацию.
+import './tracing';
 import 'reflect-metadata';
 import { Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
@@ -6,6 +13,7 @@ import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import { json, urlencoded } from 'express';
 import { createProxyMiddleware } from 'http-proxy-middleware';
 import { AppModule } from './app.module';
+import { metricsMiddleware } from './metrics/metrics';
 
 async function bootstrap(): Promise<void> {
   // Отключаем автоматический body-parser Nest: если он разберёт тело
@@ -22,6 +30,10 @@ async function bootstrap(): Promise<void> {
     origin: config.get<string>('CORS_ORIGIN', 'http://localhost:5173'),
     credentials: true,
   });
+
+  // Раньше всех прокси-блоков ниже — иначе не увидел бы большую часть
+  // трафика вообще (см. комментарий в metrics/metrics.ts).
+  app.use(metricsMiddleware);
 
   // Единственная публичная точка входа для авторизации: снаружи виден
   // только gateway, а какой сервис реально отвечает — деталь реализации.
@@ -86,7 +98,7 @@ async function bootstrap(): Promise<void> {
 
   // Health-эндпоинты выносим за префикс /api, чтобы балансировщик
   // в AWS мог опрашивать их напрямую по короткому пути.
-  app.setGlobalPrefix('api', { exclude: ['health', 'health/ready'] });
+  app.setGlobalPrefix('api', { exclude: ['health', 'health/ready', 'metrics'] });
 
   // /api/docs, а не /api/auth/... — сюда pathFilter прокси не достаёт,
   // маршрут остаётся на самом gateway, а не улетает на auth.

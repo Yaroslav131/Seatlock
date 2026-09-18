@@ -1,3 +1,5 @@
+// Первая строка файла — не случайность, см. tracing.ts.
+import './tracing';
 import 'reflect-metadata';
 import { Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';

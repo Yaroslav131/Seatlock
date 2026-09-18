@@ -2,6 +2,7 @@ import { Inject, Injectable, Logger, OnApplicationBootstrap } from '@nestjs/comm
 import { ConfigService } from '@nestjs/config';
 import * as amqp from 'amqplib';
 import { MailService } from '../mail/mail.service';
+import { orderPaidProcessedTotal } from '../metrics/business-metrics';
 import { PrismaService } from '../prisma/prisma.service';
 import { ORDER_PAID_QUEUE, RABBITMQ_CHANNEL } from '../rabbitmq/rabbitmq.module';
 import { TicketData, TicketPdfService } from '../tickets/ticket-pdf.service';
@@ -100,6 +101,7 @@ export class OrderPaidConsumer implements OnApplicationBootstrap {
         create: { orderId: event.orderId, type: NOTIFICATION_TYPE, status: 'SENT', pdfKey },
         update: { status: 'SENT', pdfKey, errorMessage: null },
       });
+      orderPaidProcessedTotal.inc({ result: 'sent' });
       this.channel.ack(msg);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -114,6 +116,7 @@ export class OrderPaidConsumer implements OnApplicationBootstrap {
         },
         update: { status: 'FAILED', errorMessage: message },
       });
+      orderPaidProcessedTotal.inc({ result: 'failed' });
       // requeue:false — без цикла ретраев в этой версии (см. план),
       // сообщение уходит в DLQ через x-dead-letter-exchange.
       this.channel.nack(msg, false, false);

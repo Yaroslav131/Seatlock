@@ -1,3 +1,5 @@
+// Первая строка файла — не случайность, см. tracing.ts.
+import './tracing';
 import 'reflect-metadata';
 import { Logger, ValidationPipe } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
@@ -15,7 +17,7 @@ async function bootstrap(): Promise<void> {
   const config = app.get(ConfigService);
 
   app.set('trust proxy', true);
-  app.setGlobalPrefix('api/payment', { exclude: ['health', 'health/ready'] });
+  app.setGlobalPrefix('api/payment', { exclude: ['health', 'health/ready', 'metrics'] });
   app.useGlobalPipes(
     new ValidationPipe({
       whitelist: true,

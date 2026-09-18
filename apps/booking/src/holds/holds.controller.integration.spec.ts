@@ -43,7 +43,7 @@ describe('HoldsController (интеграция, настоящий Nest + на�
     app = moduleRef.createNestApplication();
     // Ровно то же, что и настоящий main.ts — иначе тест проверяет не то
     // приложение, что реально едет в прод.
-    app.setGlobalPrefix('api/booking', { exclude: ['health', 'health/ready'] });
+    app.setGlobalPrefix('api/booking', { exclude: ['health', 'health/ready', 'metrics'] });
     app.useGlobalPipes(
       new ValidationPipe({ whitelist: true, forbidNonWhitelisted: true, transform: true }),
     );
@@ -170,5 +170,11 @@ describe('HoldsController (интеграция, настоящий Nest + на�
       .set('Authorization', `Bearer ${token}`)
       .expect(200);
     expect(res.text).toBe('');
+  });
+
+  it('GET /metrics — отдаёт метрики в формате Prometheus', async () => {
+    const res = await request(app.getHttpServer()).get('/metrics').expect(200);
+    expect(res.headers['content-type']).toMatch(/^text\/plain/);
+    expect(res.text).toContain('# TYPE hold_attempts_total counter');
   });
 });

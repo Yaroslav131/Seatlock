@@ -1,6 +1,7 @@
 import { Inject, Injectable, Logger } from '@nestjs/common';
 import { Interval } from '@nestjs/schedule';
 import * as amqp from 'amqplib';
+import { outboxPublishTotal } from '../metrics/business-metrics';
 import { PAYMENT_EVENTS_EXCHANGE, RABBITMQ_CHANNEL } from '../rabbitmq/rabbitmq.module';
 import { PrismaService } from '../prisma/prisma.service';
 
@@ -53,16 +54,19 @@ export class OutboxPublisherService {
           where: { id: event.id },
           data: { publishedAt: new Date() },
         });
+        outboxPublishTotal.inc({ result: 'ok' });
       } catch (error) {
         if (error instanceof UnroutableMessageError) {
           // Ожидаемо, пока нет notification — не "ошибка", а состояние
           // "публиковать пока некому". publishedAt не проставляем: как
           // только появится очередь, следующий тик доставит успешно.
+          outboxPublishTotal.inc({ result: 'unroutable' });
           this.logger.warn(
             `outbox-событие ${event.id} (${event.eventType}) некуда доставить — ни одна очередь не привязана к ${PAYMENT_EVENTS_EXCHANGE}`,
           );
           continue;
         }
+        outboxPublishTotal.inc({ result: 'error' });
         const message = error instanceof Error ? error.message : String(error);
         this.logger.warn(
           `не удалось опубликовать outbox-событие ${event.id} (${event.eventType}): ${message} — попробую на следующем тике`,
