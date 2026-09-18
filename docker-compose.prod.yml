@@ -65,6 +65,10 @@ services:
       AUTH_DATABASE_URL: postgresql://seatlock:${POSTGRES_PASSWORD}@postgres:5432/seatlock?schema=auth
       JWT_ACCESS_SECRET: ${JWT_ACCESS_SECRET}
       JWT_REFRESH_SECRET: ${JWT_REFRESH_SECRET}
+      # Контейнеры в одной compose-сети — по имени сервиса, а не
+      # localhost/host.docker.internal, как в dev (там сервисы — голые
+      # процессы на хосте, см. docker/prometheus.yml).
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://jaeger:4318
     # Порт наружу не публикуем — снаружи виден только gateway,
     # он и проксирует /api/auth сюда по имени сервиса.
 
@@ -85,6 +89,7 @@ services:
       CATALOG_DATABASE_URL: postgresql://seatlock:${POSTGRES_PASSWORD}@postgres:5432/seatlock?schema=catalog
       REDIS_URL: redis://redis:6379
       JWT_ACCESS_SECRET: ${JWT_ACCESS_SECRET}
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://jaeger:4318
     # Порт наружу не публикуем — снаружи виден только gateway.
 
   booking:
@@ -103,6 +108,7 @@ services:
       REDIS_URL: redis://redis:6379
       JWT_ACCESS_SECRET: ${JWT_ACCESS_SECRET}
       SEAT_HOLD_TTL_SECONDS: 300
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://jaeger:4318
     # Порт наружу не публикуем — снаружи виден только gateway.
 
   payment:
@@ -131,6 +137,7 @@ services:
       PAYMENT_PROVIDER: fake
       STRIPE_SECRET_KEY: ${STRIPE_SECRET_KEY:-}
       STRIPE_WEBHOOK_SECRET: ${STRIPE_WEBHOOK_SECRET:-}
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://jaeger:4318
     # Порт наружу не публикуем — снаружи виден только gateway, он же
     # проксирует и вебхук провайдера (сырые байты, см. apps/gateway/src/main.ts).
 
@@ -191,6 +198,7 @@ services:
       SMTP_SECURE: 'true'
       SMTP_USER: resend
       SMTP_PASSWORD: ${RESEND_API_KEY}
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://jaeger:4318
     # Порт наружу не публикуем — как и payment, у notification нет
     # публичного HTTP API, gateway его не проксирует.
 
@@ -231,6 +239,7 @@ services:
       PAYMENT_SERVICE_URL: http://payment:3004
       JWT_ACCESS_SECRET: ${JWT_ACCESS_SECRET}
       JWT_REFRESH_SECRET: ${JWT_REFRESH_SECRET}
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://jaeger:4318
 
   caddy:
     image: caddy:2-alpine
@@ -254,6 +263,51 @@ services:
     depends_on:
       - gateway
 
+  jaeger:
+    image: jaegertracing/all-in-one:latest
+    restart: unless-stopped
+    environment:
+      COLLECTOR_OTLP_ENABLED: 'true'
+    ports:
+      # Только на loopback самого сервера — снаружи недоступно вообще,
+      # смотреть через `ssh -L 16686:localhost:16686 deploy@<host>`.
+      # Тот же принцип, что у остальных сервисов выше: единственный
+      # публичный вход в систему — Caddy.
+      - '127.0.0.1:16686:16686'
+    # 4318 (приём OTLP от остальных контейнеров) на хост не публикуем —
+    # сервисы шлют трейсы внутри этой же compose-сети по имени "jaeger".
+
+  prometheus:
+    image: prom/prometheus:latest
+    restart: unless-stopped
+    volumes:
+      - ./docker/prometheus.prod.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheusdata:/prometheus
+    ports:
+      - '127.0.0.1:9090:9090'
+    # Никакого --web.enable-remote-write-receiver, как в dev — нагрузочные
+    # тесты на прод не гоняем (см. packages/load-test/README.md), приём
+    # remote_write снаружи здесь просто не нужен.
+
+  grafana:
+    image: grafana/grafana:latest
+    restart: unless-stopped
+    volumes:
+      - ./docker/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./docker/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafanadata:/var/lib/grafana
+    environment:
+      # В отличие от dev — никакого анонимного admin-доступа. Пароль
+      # берём из .env сервера (там же, где POSTGRES_PASSWORD и остальные
+      # секреты) — его нужно завести туда вручную, в репозитории его нет.
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD}
+    ports:
+      - '127.0.0.1:3006:3000'
+    depends_on:
+      - prometheus
+      - jaeger
+
 volumes:
   pgdata:
   redisdata:
@@ -261,3 +315,5 @@ volumes:
   miniodata:
   caddy_data:
   caddy_config:
+  prometheusdata:
+  grafanadata:
