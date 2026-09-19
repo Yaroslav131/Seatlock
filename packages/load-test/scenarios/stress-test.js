@@ -54,6 +54,21 @@ const PEAK_RATE = Number(__ENV.PEAK_RATE || 100); // итераций/сек н�
 const PRE_ALLOCATED_VUS = Number(__ENV.PRE_ALLOCATED_VUS || 200);
 const MAX_VUS = Number(__ENV.MAX_VUS || 2000);
 
+// SKIP_WEBHOOK=1 — не дёргать фейковый вебхук оплаты: заказы остаются
+// PENDING, событие order.paid не создаётся, notification вообще не
+// запускается — письма физически невозможны (нужно для прогона по проду,
+// где SMTP — настоящий Resend). Цепочка outbox → RabbitMQ → notification
+// при этом не нагружается — это осознанная цена безопасности.
+const SKIP_WEBHOOK = __ENV.SKIP_WEBHOOK === '1';
+
+// ABORT_ON_DEGRADATION=1 — k6 сам останавливает тест, если сайт начал
+// деградировать (p95 > ABORT_P95_MS или доля сбоев > 10%), а не продолжает
+// добивать. Пороги k6 считаются по ВСЕМУ прогону накопительно, а не по
+// скользящему окну, поэтому это страховочная сетка, а не точный детектор
+// колена — его ищите по графикам Grafana.
+const ABORT_ON_DEGRADATION = __ENV.ABORT_ON_DEGRADATION === '1';
+const ABORT_P95_MS = Number(__ENV.ABORT_P95_MS || 2000);
+
 // 403/409 — штатные исходы конкуренции за место (см. orders.service.ts) и
 // исчерпанного пула мест, не сбои для http_req_failed.
 http.setResponseCallback(http.expectedStatuses(200, 201, 403, 409));
@@ -81,7 +96,14 @@ export const options = {
     // поиск предела, а не проверка "прошёл/не прошёл". Порог здесь лишь
     // чтобы итоговый отчёт явно подсветил, если реальных 5xx/сетевых
     // сбоев стало заметно много.
-    http_req_failed: ['rate<0.10'],
+    http_req_failed: ABORT_ON_DEGRADATION
+      ? [{ threshold: 'rate<0.10', abortOnFail: true, delayAbortEval: '20s' }]
+      : ['rate<0.10'],
+    ...(ABORT_ON_DEGRADATION && {
+      http_req_duration: [
+        { threshold: `p(95)<${ABORT_P95_MS}`, abortOnFail: true, delayAbortEval: '20s' },
+      ],
+    }),
   },
 };
 
@@ -145,6 +167,11 @@ export default function (data) {
     return;
   }
   stageOutcomes.add(1, { stage: 'order', result: 'ok' });
+
+  if (SKIP_WEBHOOK) {
+    stageOutcomes.add(1, { stage: 'webhook', result: 'skipped' });
+    return;
+  }
 
   const order = orderRes.json();
   const webhookRes = http.post(

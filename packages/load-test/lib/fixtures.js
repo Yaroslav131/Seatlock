@@ -5,6 +5,10 @@ import { signAccessToken } from './jwt.js';
 export const GATEWAY_URL = __ENV.GATEWAY_URL || 'http://localhost:3000';
 export const JWT_ACCESS_SECRET = __ENV.JWT_ACCESS_SECRET || 'dev-access-secret-change-me';
 
+// Префикс в названиях зала/события: по нему тестовые данные видно
+// посетителям как тестовые и находятся SQL-очисткой (cleanup-prod.sql).
+export const TEST_MARKER = __ENV.TEST_MARKER || '[LOADTEST]';
+
 function uniqueSuffix() {
   return `${Date.now()}-${Math.random().toString(36).slice(2)}`;
 }
@@ -43,7 +47,11 @@ export function createPublishedEvent(rows, seatsPerRow) {
 
   const venueRes = http.post(
     `${GATEWAY_URL}/api/catalog/venues`,
-    JSON.stringify({ name: `Зал ${suffix}`, city: 'Минск', address: 'пр. Победителей, 1' }),
+    JSON.stringify({
+      name: `${TEST_MARKER} Зал ${suffix}`,
+      city: 'Минск',
+      address: 'пр. Победителей, 1',
+    }),
     { headers: authHeaders },
   );
   check(venueRes, { 'venue создан': (r) => r.status === 201 });
@@ -63,7 +71,7 @@ export function createPublishedEvent(rows, seatsPerRow) {
     `${GATEWAY_URL}/api/catalog/events`,
     JSON.stringify({
       venueId: venue.id,
-      title: `Событие ${suffix}`,
+      title: `${TEST_MARKER} Событие ${suffix}`,
       startsAt: '2026-12-20T19:00:00.000Z',
       basePriceCents: 100000,
     }),
