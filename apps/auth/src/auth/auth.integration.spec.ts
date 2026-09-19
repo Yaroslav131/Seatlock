@@ -49,7 +49,7 @@ describe('AuthController (интеграция, настоящий Nest + нас
     // приложение, что реально едет в прод.
     app.set('trust proxy', true);
     app.use(cookieParser());
-    app.setGlobalPrefix('api', { exclude: ['health', 'health/ready'] });
+    app.setGlobalPrefix('api', { exclude: ['health', 'health/ready', 'metrics'] });
     app.useGlobalPipes(
       new ValidationPipe({ whitelist: true, forbidNonWhitelisted: true, transform: true }),
     );
@@ -157,5 +157,11 @@ describe('AuthController (интеграция, настоящий Nest + нас
     await request(app.getHttpServer())
       .get('/api/internal/users/00000000-0000-4000-8000-000000000000')
       .expect(404);
+  });
+
+  it('GET /metrics — отдаёт метрики в формате Prometheus', async () => {
+    const res = await request(app.getHttpServer()).get('/metrics').expect(200);
+    expect(res.headers['content-type']).toMatch(/^text\/plain/);
+    expect(res.text).toContain('# TYPE process_cpu_seconds_total counter');
   });
 });

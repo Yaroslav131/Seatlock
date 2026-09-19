@@ -87,7 +87,7 @@ describe('payment (интеграция, настоящий Nest + настоя�
     // Ровно то же, что и настоящий main.ts — иначе тест проверяет не то
     // приложение, что реально едет в прод.
     app.set('trust proxy', true);
-    app.setGlobalPrefix('api/payment', { exclude: ['health', 'health/ready'] });
+    app.setGlobalPrefix('api/payment', { exclude: ['health', 'health/ready', 'metrics'] });
     app.useGlobalPipes(
       new ValidationPipe({ whitelist: true, forbidNonWhitelisted: true, transform: true }),
     );
@@ -274,5 +274,11 @@ describe('payment (интеграция, настоящий Nest + настоя�
 
     const reloaded = await prisma.outboxEvent.findUniqueOrThrow({ where: { id: event.id } });
     expect(reloaded.publishedAt).toBeNull();
+  });
+
+  it('GET /metrics — отдаёт метрики в формате Prometheus', async () => {
+    const res = await request(app.getHttpServer()).get('/metrics').expect(200);
+    expect(res.headers['content-type']).toMatch(/^text\/plain/);
+    expect(res.text).toContain('# TYPE orders_created_total counter');
   });
 });

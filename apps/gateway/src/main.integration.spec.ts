@@ -83,7 +83,7 @@ describe('gateway (интеграция: прокси + /api/me)', () => {
     );
     app.use(json());
     app.use(urlencoded({ extended: true }));
-    app.setGlobalPrefix('api', { exclude: ['health', 'health/ready'] });
+    app.setGlobalPrefix('api', { exclude: ['health', 'health/ready', 'metrics'] });
 
     await app.init();
   });
@@ -136,5 +136,11 @@ describe('gateway (интеграция: прокси + /api/me)', () => {
   it('GET /health — вне префикса /api, отвечает без апстрима', async () => {
     await request(app.getHttpServer()).get('/health').expect(200, { status: 'ok' });
     expect(upstreamRequests).toHaveLength(0);
+  });
+
+  it('GET /metrics — отдаёт метрики в формате Prometheus', async () => {
+    const res = await request(app.getHttpServer()).get('/metrics').expect(200);
+    expect(res.headers['content-type']).toMatch(/^text\/plain/);
+    expect(res.text).toContain('# TYPE process_cpu_seconds_total counter');
   });
 });

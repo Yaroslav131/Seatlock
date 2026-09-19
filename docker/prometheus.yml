@@ -1,0 +1,34 @@
+global:
+  scrape_interval: 15s
+
+# job_name = имя сервиса напрямую — удобно писать запросы вида
+# http_requests_total{job="payment"} в Grafana, не заводя отдельный
+# relabeling под это.
+#
+# host.docker.internal — сервисы в dev это голые Node-процессы на хосте
+# (см. README "Порты"), не контейнеры, поэтому Prometheus (сам внутри
+# контейнера) стучится наружу на хост, а не по имени контейнера.
+scrape_configs:
+  - job_name: gateway
+    static_configs:
+      - targets: ['host.docker.internal:3000']
+  - job_name: auth
+    static_configs:
+      - targets: ['host.docker.internal:3001']
+  - job_name: catalog
+    static_configs:
+      - targets: ['host.docker.internal:3002']
+  - job_name: booking
+    static_configs:
+      - targets: ['host.docker.internal:3003']
+  - job_name: payment
+    static_configs:
+      - targets: ['host.docker.internal:3004']
+  - job_name: notification
+    static_configs:
+      - targets: ['host.docker.internal:3005']
+
+  # k6 отдаёт свои метрики (--out experimental-prometheus-rw) сюда же
+  # push'ем на /api/v1/write — приём remote_write не включён в
+  # Prometheus по умолчанию, см. флаг --web.enable-remote-write-receiver
+  # у сервиса prometheus в docker-compose.yml.

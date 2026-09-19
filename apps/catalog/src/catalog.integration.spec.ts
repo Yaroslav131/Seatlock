@@ -46,7 +46,7 @@ describe('CatalogController (интеграция, настоящий Nest + н�
     // Ровно то же, что и настоящий main.ts — иначе тест проверяет не то
     // приложение, что реально едет в прод.
     app.set('trust proxy', true);
-    app.setGlobalPrefix('api/catalog', { exclude: ['health', 'health/ready'] });
+    app.setGlobalPrefix('api/catalog', { exclude: ['health', 'health/ready', 'metrics'] });
     app.useGlobalPipes(
       new ValidationPipe({ whitelist: true, forbidNonWhitelisted: true, transform: true }),
     );
@@ -177,5 +177,11 @@ describe('CatalogController (интеграция, настоящий Nest + н�
       .patch(`/api/catalog/events/${eventRes.body.id}/publish`)
       .set('Authorization', `Bearer ${otherToken}`)
       .expect(403);
+  });
+
+  it('GET /metrics — отдаёт метрики в формате Prometheus', async () => {
+    const res = await request(app.getHttpServer()).get('/metrics').expect(200);
+    expect(res.headers['content-type']).toMatch(/^text\/plain/);
+    expect(res.text).toContain('# TYPE process_cpu_seconds_total counter');
   });
 });

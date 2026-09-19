@@ -3,6 +3,7 @@ import { ConfigModule } from '@nestjs/config';
 import { RedisModule } from './cache/redis.module';
 import { EventsModule } from './events/events.module';
 import { HealthModule } from './health/health.module';
+import { MetricsModule } from './metrics/metrics.module';
 import { PrismaModule } from './prisma/prisma.module';
 import { VenuesModule } from './venues/venues.module';
 
@@ -12,6 +13,7 @@ import { VenuesModule } from './venues/venues.module';
     PrismaModule,
     RedisModule,
     HealthModule,
+    MetricsModule,
     VenuesModule,
     EventsModule,
   ],

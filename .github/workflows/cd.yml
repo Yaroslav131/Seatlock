@@ -154,7 +154,10 @@ jobs:
             # caddy аналогично — сам образ не меняется, но docker compose
             # up сам заметит, если поменялось описание сервиса (например,
             # новый volume под статику фронтенда) и пересоздаст только его.
-            docker compose -f docker-compose.prod.yml up -d rabbitmq minio auth catalog booking payment notification gateway caddy
+            # jaeger/prometheus/grafana — тем же принципом, что и
+            # rabbitmq/minio выше: сервисов раньше не было в файле вообще,
+            # up сам создаст контейнеры по новому описанию.
+            docker compose -f docker-compose.prod.yml up -d rabbitmq minio auth catalog booking payment notification gateway caddy jaeger prometheus grafana
 
             # Бакет не создаётся сам при первом старте MinIO — идемпотентно
             # (--ignore-existing, не падает на повторных деплоях), тем же

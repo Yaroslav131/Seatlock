@@ -9,6 +9,7 @@ import {
 import { ConfigService } from '@nestjs/config';
 import { AuthenticatedUser } from '../auth/jwt-auth.guard';
 import { Order, Prisma } from '../generated/prisma';
+import { ordersCreatedTotal } from '../metrics/business-metrics';
 import { OutboxService } from '../outbox/outbox.service';
 import { PaymentProviderPort, PAYMENT_PROVIDER } from '../providers/payment-provider.port';
 import { PrismaService } from '../prisma/prisma.service';
@@ -55,11 +56,13 @@ export class OrdersService {
   ): Promise<{ order: Order; clientSecret: string }> {
     const hold = await this.fetchMyHold(dto.eventId, authorizationHeader);
     if (!hold || hold.seatId !== dto.seatId) {
+      ordersCreatedTotal.inc({ result: 'forbidden' });
       throw new ForbiddenException('Вы не держите это место — сначала займите его на карте зала');
     }
 
     const event = await this.fetchEvent(dto.eventId);
     if (event.status !== 'PUBLISHED') {
+      ordersCreatedTotal.inc({ result: 'forbidden' });
       throw new ForbiddenException('Событие ещё не опубликовано');
     }
 
@@ -81,6 +84,7 @@ export class OrdersService {
       // того, объявлен индекс в schema.prisma или дописан вручную в
       // migration.sql (см. комментарий там же).
       if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
+        ordersCreatedTotal.inc({ result: 'conflict' });
         throw new ConflictException('Это место уже покупается — попробуйте другое');
       }
       throw error;
@@ -102,6 +106,7 @@ export class OrdersService {
       data: { providerIntentId },
     });
 
+    ordersCreatedTotal.inc({ result: 'ok' });
     return { order: updated, clientSecret };
   }
 

@@ -1,0 +1,26 @@
+global:
+  scrape_interval: 15s
+
+# В отличие от docker/prometheus.yml (dev) — сервисы здесь не голые
+# процессы на хосте, а контейнеры в той же compose-сети, поэтому
+# таргеты по имени сервиса и его внутреннему порту (см.
+# docker-compose.prod.yml), а не host.docker.internal.
+scrape_configs:
+  - job_name: gateway
+    static_configs:
+      - targets: ['gateway:3000']
+  - job_name: auth
+    static_configs:
+      - targets: ['auth:3001']
+  - job_name: catalog
+    static_configs:
+      - targets: ['catalog:3002']
+  - job_name: booking
+    static_configs:
+      - targets: ['booking:3003']
+  - job_name: payment
+    static_configs:
+      - targets: ['payment:3004']
+  - job_name: notification
+    static_configs:
+      - targets: ['notification:3005']
