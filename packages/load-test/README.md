@@ -60,10 +60,11 @@ docker run --rm -i --network host grafana/k6 run \
   (`PEAK_RATE`) независимо от того, как быстро отвечает система, поднимая
   под это столько VU, сколько нужно (до `MAX_VUS`). Нагружает всю цепочку
   разом (gateway → booking/Redis → payment/Postgres+outbox → RabbitMQ →
-  notification/PDF+MinIO+SMTP), не один эндпоинт. Пул мест намеренно
-  небольшой — под целевым темпом раскупается быстро, и основную часть
-  прогона система работает уже "на распроданном" событии (реалистичный
-  профиль старта продаж). Порог `http_req_failed` мягкий и
+  notification), не один эндпоинт; как далеко доходит цепочка, зависит от
+  режима (`SKIP_WEBHOOK`, `BUYER_POOL`, см. «Гигантский прогон»). По
+  умолчанию пул мест небольшой — под целевым темпом раскупается быстро,
+  и основную часть прогона система работает уже "на распроданном"
+  событии (профиль старта продаж). Порог `http_req_failed` мягкий и
   информационный — это не гейт "прошёл/не прошёл", а поиск точки, где
   начинается деградация: если тест проходит чисто, поднимайте `PEAK_RATE`
   и гоняйте снова, пока не увидите рост latency/ошибок — сам этот момент
@@ -83,21 +84,23 @@ i/o timeout` — это сетевой обрыв на стыке k6-конте�
 
 ## Переменные окружения
 
-| Переменная             | По умолчанию                  | Смысл                                                            |
-| ---------------------- | ----------------------------- | ---------------------------------------------------------------- |
-| `GATEWAY_URL`          | `http://localhost:3000`       | Адрес gateway                                                    |
-| `JWT_ACCESS_SECRET`    | `dev-access-secret-change-me` | Должен совпадать с `.env` сервисов                               |
-| `VUS`                  | `50`                          | `single-seat-race.js`: число участников гонки                    |
-| `EVENTS`               | `5`                           | `mixed-load.js`/`stress-test.js`: число событий                  |
-| `SEATS_PER_EVENT`      | `30` / `40`                   | `mixed-load.js`/`stress-test.js`: мест на событие                |
-| `PEAK_VUS`             | `30`                          | `mixed-load.js`: пиковое число VU                                |
-| `PEAK_RATE`            | `100`                         | `stress-test.js`: целевой темп, итераций/сек на пике             |
-| `PRE_ALLOCATED_VUS`    | `200`                         | `stress-test.js`: VU, выделенных заранее                         |
-| `MAX_VUS`              | `2000`                        | `stress-test.js`: потолок VU, которые k6 может поднять           |
-| `SKIP_WEBHOOK`         | выкл.                         | `stress-test.js`: `1` — не слать вебхук оплаты (без писем)       |
-| `ABORT_ON_DEGRADATION` | выкл.                         | `stress-test.js`: `1` — k6 сам останавливает тест при деградации |
-| `ABORT_P95_MS`         | `2000`                        | `stress-test.js`: порог p95 для автостопа                        |
-| `TEST_MARKER`          | `[LOADTEST]`                  | префикс названий тестовых залов/событий                          |
+| Переменная             | По умолчанию                  | Смысл                                                                              |
+| ---------------------- | ----------------------------- | ---------------------------------------------------------------------------------- |
+| `GATEWAY_URL`          | `http://localhost:3000`       | Адрес gateway                                                                      |
+| `JWT_ACCESS_SECRET`    | `dev-access-secret-change-me` | Должен совпадать с `.env` сервисов                                                 |
+| `VUS`                  | `50`                          | `single-seat-race.js`: число участников гонки                                      |
+| `EVENTS`               | `5`                           | `mixed-load.js`/`stress-test.js`: число событий                                    |
+| `SEATS_PER_EVENT`      | `30` / `40`                   | `mixed-load.js`/`stress-test.js`: мест на событие                                  |
+| `PEAK_VUS`             | `30`                          | `mixed-load.js`: пиковое число VU                                                  |
+| `PEAK_RATE`            | `100`                         | `stress-test.js`: целевой темп, итераций/сек на пике                               |
+| `PRE_ALLOCATED_VUS`    | `200`                         | `stress-test.js`: VU, выделенных заранее                                           |
+| `MAX_VUS`              | `2000`                        | `stress-test.js`: потолок VU, которые k6 может поднять                             |
+| `SKIP_WEBHOOK`         | выкл.                         | `stress-test.js`: `1` — не слать вебхук оплаты (без писем)                         |
+| `ABORT_ON_DEGRADATION` | выкл.                         | `stress-test.js`: `1` — k6 сам останавливает тест при деградации                   |
+| `ABORT_P95_MS`         | `2000`                        | `stress-test.js`: порог p95 для автостопа                                          |
+| `BUYER_POOL`           | выкл.                         | `stress-test.js`: N посеянных покупателей (`seed-buyers.sql`) — вся цепочка до PDF |
+| `PEAK_HOLD_SECONDS`    | `60`                          | `stress-test.js`: сколько секунд держать пик                                       |
+| `TEST_MARKER`          | `[LOADTEST]`                  | префикс названий тестовых залов/событий                                            |
 
 ## Прогон по проду
 
@@ -131,6 +134,49 @@ k6 run scenarios/stress-test.js
   (по умолчанию `ROLLBACK`, сначала проверьте счётчики);
 - Redis-холды — сами истекают за 300 с;
 - пока тест идёт, события `[LOADTEST] …` видны посетителям в каталоге.
+
+## Гигантский прогон: вся цепочка до PDF (без писем)
+
+Чтобы нагрузить **всё** — Redis, Postgres, RabbitMQ, генерацию PDF и S3 — нужны две вещи:
+
+1. **Настоящие покупатели.** `notification` берёт email из `auth`; с вымышленными токенами он получает 404 и до PDF не доходит. `seed-buyers.sql` создаёт N пользователей `k6-buyer-<i>@loadtest.invalid` (id = `md5(...)::uuid`, k6 считает тот же id сам).
+2. **Большой пул мест**, иначе всё раскупится за минуту, и остаток прогона это отказы в Redis.
+
+Письма не уходят: `notification` не отправляет на `@loadtest.invalid` (RFC 2606, домен не резолвится). Проверка по получателю, а не глобальный флаг: её нельзя оставить включённой для реальных клиентов. PDF, загрузка в S3 и лог выполняются как обычно.
+
+```powershell
+# 1. посев (dev; на проде — docker compose -f docker-compose.prod.yml exec -T postgres psql ... < seed-buyers.sql)
+docker exec -i seatlock-postgres psql -U seatlock -d seatlock -v n=2000 < packages/load-test/seed-buyers.sql
+
+# 2. прогон: 40 событий x 500 мест = 20 000 мест, покупатели из посева
+$env:BUYER_POOL='2000'; $env:EVENTS='40'; $env:SEATS_PER_EVENT='500'
+$env:PEAK_RATE='100'; $env:PEAK_HOLD_SECONDS='180'
+k6 run scenarios/stress-test.js
+```
+
+`BUYER_POOL` должен быть не меньше числа одновременно работающих VU (по умолчанию потолок 2000): каждый VU закреплён за своим покупателем, потому что booking позволяет одному пользователю держать одно место на событие. Память k6 растёт с числом мест (список id копируется в каждый VU): при 20 000 мест это около 2 МБ на VU.
+
+**Что смотреть на дашборде:** «очередь order.paid» (растёт, если PDF делаются медленнее, чем оплачиваются заказы: consumer берёт по одному сообщению), CPU и event loop lag у `notification` (генерация PDF блокирует поток), память.
+
+**Найдено этим прогоном:** внутренний эндпоинт `auth` (`/api/internal/users/:id`), который вызывает `notification`, попадал под общий лимит `auth` (20 запросов/мин на IP). Все вызовы идут с одного адреса, поэтому после 20 билетов в минуту `auth` отвечал 429, и билеты уходили в DLQ (из 600 оплаченных мест до конца довели 41). Исправлено `@SkipThrottle()` на внутреннем контроллере.
+
+### Очистка после прогона
+
+Порядок важен: сначала PDF в MinIO (пока в БД есть заказы, по которым их находим), потом SQL.
+
+```bash
+# 1. список ключей ТОЛЬКО тестовых билетов (по заказам тестовых покупателей)
+docker compose -f docker-compose.prod.yml exec -T postgres psql -U seatlock -d seatlock -Atc \
+  "select 'local/seatlock-tickets/tickets/'||id||'.pdf' from payment.orders where \"userId\" in (select id from auth.users where email like '%@loadtest.invalid')" > loadtest-keys.txt
+wc -l loadtest-keys.txt   # сверьте число с ожидаемым
+
+# 2. удалить эти объекты (НЕ используйте rm --recursive на всём бакете: там билеты реальных клиентов)
+docker compose -f docker-compose.prod.yml exec -T minio sh -c 'mc alias set local http://localhost:9000 seatlock "$MINIO_ROOT_PASSWORD" >/dev/null && xargs -n 100 mc rm --quiet' < loadtest-keys.txt
+
+# 3. Postgres: cleanup-prod.sql (сначала прогон с ROLLBACK и проверка счётчиков, потом COMMIT)
+```
+
+Очередь RabbitMQ после успешного прогона пуста. Если в DLQ что-то есть, сначала посмотрите, чьи это сообщения, и только потом `rabbitmqctl purge_queue`: на проде там могут быть и реальные.
 
 ## Не часть CI
 

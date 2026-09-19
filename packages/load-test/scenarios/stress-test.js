@@ -1,6 +1,7 @@
 import http from 'k6/http';
 import { check } from 'k6';
 import { Counter } from 'k6/metrics';
+import { signBuyerToken } from '../lib/buyers.js';
 import { createPublishedEvent, GATEWAY_URL, signUserToken } from '../lib/fixtures.js';
 
 // Тест на поиск предела, а не на конкретный кейс (в отличие от
@@ -21,15 +22,20 @@ import { createPublishedEvent, GATEWAY_URL, signUserToken } from '../lib/fixture
 //   удержать целевой темп) — то есть именно то, что нужно, чтобы найти
 //   потолок, а не как он выглядит изнутри.
 //
-// Нагрузка — полный путь покупки (холд → заказ → фейковый вебхук), то
-// есть это стресс не одного эндпоинта, а всей цепочки: gateway → booking
-// (Redis) → payment (Postgres + запись в outbox) → RabbitMQ →
-// notification (PDF + MinIO + SMTP) асинхронно следом. Пул мест
-// намеренно небольшой относительно ожидаемого числа попыток — под
-// целевым темпом места быстро раскупаются, и большая часть пикового
-// окна нагружает систему уже "на распроданном" событии: это тоже
-// реалистичный и тяжёлый профиль (все продолжают ломиться в момент
-// старта продаж, когда мест почти не осталось).
+// Нагрузка — путь покупки (холд → заказ → фейковый вебхук). Какая часть
+// цепочки реально работает, зависит от режима:
+//   * по умолчанию (вымышленные покупатели) — gateway → booking (Redis) →
+//     payment (Postgres, outbox) → RabbitMQ; notification получает
+//     сообщение, но падает на запросе email в auth (404) до PDF — в DLQ;
+//   * BUYER_POOL=N (посеянные покупатели) — вся цепочка до конца:
+//     notification берёт email, рисует PDF, кладёт в S3, пишет лог; письмо
+//     на @loadtest.invalid не отправляется (mail.service.ts);
+//   * SKIP_WEBHOOK=1 — только холд и заказ: ни outbox, ни RabbitMQ, ни
+//     notification не задействованы.
+// Размер пула мест (EVENTS × SEATS_PER_EVENT) определяет, на чём система
+// проводит пик: с маленьким пулом места раскупаются за минуту, и почти весь
+// прогон это отказы в Redis; с большим — до конца идёт запись заказов,
+// PDF и обработка очереди.
 //
 // Запуск:
 //   docker run --rm -v "$(pwd):/scripts" -w /scripts \
@@ -53,6 +59,16 @@ const SEATS_PER_EVENT = Number(__ENV.SEATS_PER_EVENT || 40); // rows(5) x seatsP
 const PEAK_RATE = Number(__ENV.PEAK_RATE || 100); // итераций/сек на пике (1-3 HTTP-запроса каждая)
 const PRE_ALLOCATED_VUS = Number(__ENV.PRE_ALLOCATED_VUS || 200);
 const MAX_VUS = Number(__ENV.MAX_VUS || 2000);
+const PEAK_HOLD_SECONDS = Number(__ENV.PEAK_HOLD_SECONDS || 60);
+
+// BUYER_POOL=N — покупатели с id из посева (seed-buyers.sql, N пользователей
+// в auth) вместо вымышленных токенов. Только с ними notification доходит до
+// конца: берёт email из auth, рисует PDF, кладёт его в S3 и пишет лог.
+// Каждый VU закреплён за одним покупателем (booking позволяет одному
+// пользователю держать одно место на событие), поэтому N должно быть не меньше
+// числа одновременно работающих VU — иначе два VU делят покупателя и мешают
+// друг другу (403 на заказе).
+const BUYER_POOL = Number(__ENV.BUYER_POOL || 0);
 
 // SKIP_WEBHOOK=1 — не дёргать фейковый вебхук оплаты: заказы остаются
 // PENDING, событие order.paid не создаётся, notification вообще не
@@ -74,6 +90,9 @@ const ABORT_P95_MS = Number(__ENV.ABORT_P95_MS || 2000);
 http.setResponseCallback(http.expectedStatuses(200, 201, 403, 409));
 
 export const options = {
+  // Посев большого числа залов/мест по сети занимает минуты, а по умолчанию
+  // setup() ограничен 60 секундами.
+  setupTimeout: '15m',
   scenarios: {
     stress: {
       executor: 'ramping-arrival-rate',
@@ -86,7 +105,7 @@ export const options = {
         { target: Math.round(PEAK_RATE * 0.5), duration: '20s' },
         { target: Math.round(PEAK_RATE * 0.75), duration: '20s' },
         { target: PEAK_RATE, duration: '30s' },
-        { target: PEAK_RATE, duration: '60s' }, // удержание пика — тут обычно и видно деградацию
+        { target: PEAK_RATE, duration: `${PEAK_HOLD_SECONDS}s` }, // удержание пика — тут обычно и видно деградацию
         { target: 0, duration: '20s' },
       ],
     },
@@ -124,7 +143,7 @@ function pickRandom(arr) {
 export default function (data) {
   const event = pickRandom(data.events);
   const seatId = pickRandom(event.seatIds);
-  const token = signUserToken('stress');
+  const token = BUYER_POOL > 0 ? signBuyerToken((__VU - 1) % BUYER_POOL) : signUserToken('stress');
   const headers = { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' };
 
   const holdRes = http.post(

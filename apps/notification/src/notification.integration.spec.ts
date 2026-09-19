@@ -229,5 +229,7 @@ describe('notification (интеграция, настоящий Nest + Postgres
     const res = await request(app.getHttpServer()).get('/metrics').expect(200);
     expect(res.headers['content-type']).toMatch(/^text\/plain/);
     expect(res.text).toContain('# TYPE order_paid_processed_total counter');
+    expect(res.text).toContain('# TYPE notification_order_paid_queue_messages gauge');
+    expect(res.text).toContain('# TYPE ticket_mail_suppressed_total counter');
   });
 });
