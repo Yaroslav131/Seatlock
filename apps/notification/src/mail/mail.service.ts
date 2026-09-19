@@ -1,6 +1,14 @@
 import { Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import * as nodemailer from 'nodemailer';
+import { ticketMailSuppressedTotal } from '../metrics/business-metrics';
+
+// .invalid зарезервирован RFC 2606 и никогда не резолвится — реальный человек
+// с таким адресом существовать не может. Нагрузочный тест (packages/load-test)
+// заводит покупателей на этом домене, чтобы вся цепочка (PDF, S3, лог) работала
+// по-настоящему, а письма в Resend не уходили. Проверка по получателю, а не
+// глобальный флаг: её нельзя случайно оставить включённой для реальных клиентов.
+export const SUPPRESSED_MAIL_DOMAIN = '@loadtest.invalid';
 
 export interface TicketEmail {
   to: string;
@@ -29,6 +37,10 @@ export class MailService {
   }
 
   async sendTicket(email: TicketEmail): Promise<void> {
+    if (email.to.toLowerCase().endsWith(SUPPRESSED_MAIL_DOMAIN)) {
+      ticketMailSuppressedTotal.inc();
+      return;
+    }
     await this.transport.sendMail({
       from: 'tickets@seatlock.fun',
       to: email.to,

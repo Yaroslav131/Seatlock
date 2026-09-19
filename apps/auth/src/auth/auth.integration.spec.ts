@@ -153,6 +153,16 @@ describe('AuthController (интеграция, настоящий Nest + нас
     expect(res.body).toEqual({ id: user.id, email });
   });
 
+  it('GET /api/internal/users/:id не режется лимитом: 30 вызовов подряд — все 200 (иначе notification теряет билеты)', async () => {
+    const user = await prisma.user.create({
+      data: { email: uniqueEmail(), passwordHash: 'irrelevant-for-this-test' },
+    });
+
+    for (let i = 0; i < 30; i++) {
+      await request(app.getHttpServer()).get(`/api/internal/users/${user.id}`).expect(200);
+    }
+  });
+
   it('GET /api/internal/users/:id на несуществующего пользователя — 404', async () => {
     await request(app.getHttpServer())
       .get('/api/internal/users/00000000-0000-4000-8000-000000000000')

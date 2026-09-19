@@ -50,4 +50,40 @@ describe('MailService', () => {
       }),
     );
   });
+
+  describe('sendTicket', () => {
+    const pdf = Buffer.from('pdf');
+    let sendMail: jest.Mock;
+    let service: MailService;
+
+    beforeEach(() => {
+      sendMail = jest.fn().mockResolvedValue(undefined);
+      createTransportMock.mockReturnValue({ sendMail });
+      service = new MailService(createConfigMock({ SMTP_HOST: 'localhost' }) as never);
+    });
+
+    it('обычному получателю — письмо уходит в SMTP', async () => {
+      await service.sendTicket({ to: 'buyer@example.com', eventTitle: 'Концерт', pdf });
+
+      expect(sendMail).toHaveBeenCalledTimes(1);
+      expect(sendMail).toHaveBeenCalledWith(expect.objectContaining({ to: 'buyer@example.com' }));
+    });
+
+    it('получателю на @loadtest.invalid — письмо не отправляется (нагрузочный тест)', async () => {
+      await service.sendTicket({ to: 'k6-buyer-7@loadtest.invalid', eventTitle: 'Концерт', pdf });
+      await service.sendTicket({ to: 'K6-BUYER-8@LoadTest.Invalid', eventTitle: 'Концерт', pdf });
+
+      expect(sendMail).not.toHaveBeenCalled();
+    });
+
+    it('домен, лишь похожий на тестовый, не подавляется', async () => {
+      await service.sendTicket({
+        to: 'buyer@notloadtest.invalid.example.com',
+        eventTitle: 'Х',
+        pdf,
+      });
+
+      expect(sendMail).toHaveBeenCalledTimes(1);
+    });
+  });
 });

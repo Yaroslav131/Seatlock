@@ -1,4 +1,5 @@
 import { Controller, Get, NotFoundException, Param } from '@nestjs/common';
+import { SkipThrottle } from '@nestjs/throttler';
 import { PrismaService } from '../prisma/prisma.service';
 
 // Внутренний server-to-server эндпоинт: notification асинхронно
@@ -9,6 +10,12 @@ import { PrismaService } from '../prisma/prisma.service';
 // проекте, граница доверия сетевая: gateway не проксирует
 // /api/internal/*, порт auth наружу не публикуется (см.
 // docker-compose.prod.yml), снаружи этот путь недостижим.
+// Без @SkipThrottle общий лимит auth (20 запросов/мин на IP, см. app.module.ts)
+// считал бы и этот эндпоинт: notification вызывает его на каждое оплаченное
+// место с одного и того же адреса, и после 20 билетов в минуту auth отвечал
+// бы 429, а билеты уходили в DLQ (нашли нагрузочным тестом). Лимит защищает
+// публичные login/register от перебора, а здесь вызывающий — свой сервис.
+@SkipThrottle()
 @Controller('internal/users')
 export class InternalController {
   constructor(private readonly prisma: PrismaService) {}
