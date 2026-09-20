@@ -17,6 +17,9 @@ const KNOWN_EVENT_TYPES = new Set<PaymentWebhookEvent['type']>([
  * настоящий вебхук — так saga-код прогоняется целиком без реального
  * провайдера.
  */
+// Детерминированный от intent id: повторный запрос заказа должен получить тот же секрет.
+const fakeClientSecret = (providerIntentId: string): string => `fake_secret_${providerIntentId}`;
+
 @Injectable()
 export class FakePaymentProvider implements PaymentProviderPort {
   private readonly logger = new Logger(FakePaymentProvider.name);
@@ -32,8 +35,12 @@ export class FakePaymentProvider implements PaymentProviderPort {
     );
     return Promise.resolve({
       providerIntentId,
-      clientSecret: `fake_secret_${randomUUID()}`,
+      clientSecret: fakeClientSecret(providerIntentId),
     });
+  }
+
+  getClientSecret(providerIntentId: string): Promise<string> {
+    return Promise.resolve(fakeClientSecret(providerIntentId));
   }
 
   verifyWebhookSignature(rawBody: Buffer): PaymentWebhookEvent | null {

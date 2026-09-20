@@ -14,6 +14,13 @@ export interface PaymentProviderPort {
     metadata: Record<string, string>;
   }): Promise<{ providerIntentId: string; clientSecret: string }>;
 
+  /**
+   * Секрет клиента уже созданного платежа. Нужен идемпотентному повтору
+   * POST /orders: повторный запрос возвращает тот же заказ, а секрет мы у
+   * себя не храним — его берут у провайдера (у Stripe это retrieve intent).
+   */
+  getClientSecret(providerIntentId: string): Promise<string>;
+
   /** null — подпись не совпала (или тело не распарсилось): вызывающий код должен ответить 400. */
   verifyWebhookSignature(
     rawBody: Buffer,

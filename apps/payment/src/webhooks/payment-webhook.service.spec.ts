@@ -23,6 +23,7 @@ function createConfigMock(values: Record<string, string> = {}) {
 function createProviderMock(): jest.Mocked<PaymentProviderPort> {
   return {
     createPaymentIntent: jest.fn(),
+    getClientSecret: jest.fn(),
     verifyWebhookSignature: jest.fn(),
     refund: jest.fn(),
   };

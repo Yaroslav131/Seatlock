@@ -18,13 +18,10 @@ class UnroutableMessageError extends Error {}
  * @Interval/@Cron, что уже использует CleanupService в auth для
  * протухших refresh-токенов.
  *
- * Потребителя (notification) пока не существует — а значит, ни одна
- * очередь ещё не привязана к payment.events, и опубликованные сейчас
- * события физически некуда доставить (exchange без очереди ничего не
- * хранит, см. rabbitmq.module.ts). mandatory:true — не способ это
- * исправить (доставить всё равно некуда), а способ ЗНАТЬ об этом:
- * без него publishedAt проставлялся бы как ни в чём не бывало, и
- * событие тихо терялось бы навсегда.
+ * mandatory:true — способ ЗНАТЬ, что событие некуда доставить (ни одна
+ * очередь не привязана к payment.events): без него publishedAt
+ * проставлялся бы как ни в чём не бывало, и событие тихо терялось бы
+ * навсегда.
  */
 @Injectable()
 export class OutboxPublisherService {
@@ -35,44 +32,72 @@ export class OutboxPublisherService {
     @Inject(RABBITMQ_CHANNEL) private readonly channel: amqp.ConfirmChannel,
   ) {}
 
+  /**
+   * Строки захватываются в транзакции через FOR UPDATE SKIP LOCKED: пока одна
+   * копия payment (или предыдущий тик той же копии) публикует пачку, другая
+   * эти строки пропускает, а не читает те же самые и не публикует их второй
+   * раз. Блокировка снимается коммитом, то есть после того как publishedAt
+   * проставлен.
+   *
+   * Всё равно "минимум один раз", а не "ровно один": если транзакция упадёт
+   * после публикации, но до коммита, строки опубликуются повторно, поэтому
+   * потребитель обязан быть идемпотентным (notification так и сделан).
+   */
   @Interval(POLL_INTERVAL_MS)
   async publishPending(): Promise<void> {
-    const events = await this.prisma.outboxEvent.findMany({
-      where: { publishedAt: null },
-      orderBy: { createdAt: 'asc' },
-      take: BATCH_SIZE,
-    });
-
-    for (const event of events) {
-      try {
-        await this.publishConfirmed(
-          event.eventType,
-          Buffer.from(JSON.stringify(event.payload)),
-          event.id,
-        );
-        await this.prisma.outboxEvent.update({
-          where: { id: event.id },
-          data: { publishedAt: new Date() },
-        });
-        outboxPublishTotal.inc({ result: 'ok' });
-      } catch (error) {
-        if (error instanceof UnroutableMessageError) {
-          // Ожидаемо, пока нет notification — не "ошибка", а состояние
-          // "публиковать пока некому". publishedAt не проставляем: как
-          // только появится очередь, следующий тик доставит успешно.
-          outboxPublishTotal.inc({ result: 'unroutable' });
-          this.logger.warn(
-            `outbox-событие ${event.id} (${event.eventType}) некуда доставить — ни одна очередь не привязана к ${PAYMENT_EVENTS_EXCHANGE}`,
-          );
-          continue;
+    await this.prisma.$transaction(
+      async (tx) => {
+        const claimed = await tx.$queryRaw<{ id: string }[]>`
+          SELECT id FROM outbox_events
+          WHERE "publishedAt" IS NULL
+          ORDER BY "createdAt" ASC
+          LIMIT ${BATCH_SIZE}
+          FOR UPDATE SKIP LOCKED
+        `;
+        if (claimed.length === 0) {
+          return;
         }
-        outboxPublishTotal.inc({ result: 'error' });
-        const message = error instanceof Error ? error.message : String(error);
-        this.logger.warn(
-          `не удалось опубликовать outbox-событие ${event.id} (${event.eventType}): ${message} — попробую на следующем тике`,
-        );
-      }
-    }
+
+        const events = await tx.outboxEvent.findMany({
+          where: { id: { in: claimed.map((row) => row.id) } },
+          orderBy: { createdAt: 'asc' },
+        });
+
+        for (const event of events) {
+          try {
+            await this.publishConfirmed(
+              event.eventType,
+              Buffer.from(JSON.stringify(event.payload)),
+              event.id,
+            );
+            await tx.outboxEvent.update({
+              where: { id: event.id },
+              data: { publishedAt: new Date() },
+            });
+            outboxPublishTotal.inc({ result: 'ok' });
+          } catch (error) {
+            if (error instanceof UnroutableMessageError) {
+              // Ожидаемо, пока нет потребителя: не "ошибка", а состояние
+              // "публиковать пока некому". publishedAt не проставляем: как
+              // только появится очередь, следующий тик доставит успешно.
+              outboxPublishTotal.inc({ result: 'unroutable' });
+              this.logger.warn(
+                `outbox-событие ${event.id} (${event.eventType}) некуда доставить — ни одна очередь не привязана к ${PAYMENT_EVENTS_EXCHANGE}`,
+              );
+              continue;
+            }
+            outboxPublishTotal.inc({ result: 'error' });
+            const message = error instanceof Error ? error.message : String(error);
+            this.logger.warn(
+              `не удалось опубликовать outbox-событие ${event.id} (${event.eventType}): ${message} — попробую на следующем тике`,
+            );
+          }
+        }
+      },
+      // Интерактивная транзакция по умолчанию живёт 5 секунд, а пачка из 50
+      // публикаций с подтверждением брокера под нагрузкой может занять дольше.
+      { timeout: 60_000 },
+    );
   }
 
   /**

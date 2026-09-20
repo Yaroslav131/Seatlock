@@ -54,6 +54,15 @@ export class OrdersService {
     user: AuthenticatedUser,
     authorizationHeader: string,
   ): Promise<{ order: Order; clientSecret: string }> {
+    // Идемпотентность: заказ на это место уже есть. Свой — повтор (клиент не
+    // дождался ответа, дважды нажал кнопку) возвращает тот же заказ, а не 409.
+    // Чужой — конфликт сразу, без походов в booking/catalog: на распроданном
+    // событии это заметно дешевле прежнего пути.
+    const existing = await this.findActiveOrder(dto.eventId, dto.seatId);
+    if (existing) {
+      return this.replayOrConflict(existing, user);
+    }
+
     const hold = await this.fetchMyHold(dto.eventId, authorizationHeader);
     if (!hold || hold.seatId !== dto.seatId) {
       ordersCreatedTotal.inc({ result: 'forbidden' });
@@ -84,6 +93,12 @@ export class OrdersService {
       // того, объявлен индекс в schema.prisma или дописан вручную в
       // migration.sql (см. комментарий там же).
       if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
+        // Гонка: между проверкой выше и вставкой заказ создал другой запрос —
+        // в том числе двойной клик этого же пользователя. Смотрим, чей он.
+        const raced = await this.findActiveOrder(dto.eventId, dto.seatId);
+        if (raced) {
+          return this.replayOrConflict(raced, user);
+        }
         ordersCreatedTotal.inc({ result: 'conflict' });
         throw new ConflictException('Это место уже покупается — попробуйте другое');
       }
@@ -95,19 +110,69 @@ export class OrdersService {
     // провайдеру — антипаттерн (риск долгих локов). Если этот вызов
     // упадёт, заказ остаётся PENDING без providerIntentId — известный
     // компромисс этой фазы, не заметается уборкой "на всякий случай".
+    const result = await this.attachPaymentIntent(order);
+
+    ordersCreatedTotal.inc({ result: 'ok' });
+    return result;
+  }
+
+  /**
+   * Создаёт платёжный intent и привязывает его к заказу, но только если у заказа
+   * ещё нет своего. Условная привязка (updateMany where providerIntentId IS NULL)
+   * нужна из-за двойного клика: два запроса могут одновременно дойти до этого
+   * места, и безусловный update оставил бы в базе intent одного, а клиенту
+   * отдал бы intent другого (оплата по нему нашла бы "неизвестный intent").
+   * Проигравший берёт intent победителя; свой неиспользованный intent остаётся
+   * у провайдера сиротой (неоплаченные intent у настоящих провайдеров истекают).
+   */
+  private async attachPaymentIntent(order: Order): Promise<{ order: Order; clientSecret: string }> {
     const { providerIntentId, clientSecret } = await this.provider.createPaymentIntent({
       amountCents: order.amountCents,
       currency: CURRENCY,
       metadata: { orderId: order.id },
     });
 
-    const updated = await this.prisma.order.update({
-      where: { id: order.id },
+    const { count } = await this.prisma.order.updateMany({
+      where: { id: order.id, providerIntentId: null },
       data: { providerIntentId },
     });
+    const current = await this.prisma.order.findUniqueOrThrow({ where: { id: order.id } });
 
-    ordersCreatedTotal.inc({ result: 'ok' });
-    return { order: updated, clientSecret };
+    if (count === 1) {
+      return { order: current, clientSecret };
+    }
+    return {
+      order: current,
+      clientSecret: await this.provider.getClientSecret(current.providerIntentId as string),
+    };
+  }
+
+  private findActiveOrder(eventId: string, seatId: string): Promise<Order | null> {
+    // Те же статусы, что в частичном уникальном индексе orders_event_seat_active_key.
+    return this.prisma.order.findFirst({
+      where: { eventId, seatId, status: { in: ['PENDING', 'PAID'] } },
+    });
+  }
+
+  private async replayOrConflict(
+    existing: Order,
+    user: AuthenticatedUser,
+  ): Promise<{ order: Order; clientSecret: string }> {
+    if (existing.userId !== user.sub) {
+      ordersCreatedTotal.inc({ result: 'conflict' });
+      throw new ConflictException('Это место уже покупается — попробуйте другое');
+    }
+    ordersCreatedTotal.inc({ result: 'existing' });
+
+    // Заказ создан, а платёжный intent тогда не удался (см. компромисс в
+    // create()) — повтор довершает начатое, а не оставляет заказ без intent.
+    if (!existing.providerIntentId) {
+      return this.attachPaymentIntent(existing);
+    }
+    return {
+      order: existing,
+      clientSecret: await this.provider.getClientSecret(existing.providerIntentId),
+    };
   }
 
   /**
