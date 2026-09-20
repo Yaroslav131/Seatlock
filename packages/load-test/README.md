@@ -162,18 +162,33 @@ k6 run scenarios/stress-test.js
 
 ### Очистка после прогона
 
-Порядок важен: сначала PDF в MinIO (пока в БД есть заказы, по которым их находим), потом SQL.
+Порядок важен: сначала PDF в MinIO (их ключи берутся из базы, пока в ней есть заказы), потом SQL. Команды проверены на проде (PowerShell, из корня репозитория).
 
-```bash
-# 1. список ключей ТОЛЬКО тестовых билетов (по заказам тестовых покупателей)
-docker compose -f docker-compose.prod.yml exec -T postgres psql -U seatlock -d seatlock -Atc \
-  "select 'local/seatlock-tickets/tickets/'||id||'.pdf' from payment.orders where \"userId\" in (select id from auth.users where email like '%@loadtest.invalid')" > loadtest-keys.txt
-wc -l loadtest-keys.txt   # сверьте число с ожидаемым
+**1. Список ключей только тестовых билетов:**
 
-# 2. удалить эти объекты (НЕ используйте rm --recursive на всём бакете: там билеты реальных клиентов)
-docker compose -f docker-compose.prod.yml exec -T minio sh -c 'mc alias set local http://localhost:9000 seatlock "$MINIO_ROOT_PASSWORD" >/dev/null && xargs -n 100 mc rm --quiet' < loadtest-keys.txt
+```powershell
+@'
+select 'local/seatlock-tickets/'||"pdfKey" from notification.notification_logs where "pdfKey" is not null and "orderId" in (select id from payment.orders where "userId" in (select id from auth.users where email like '%@loadtest.invalid'));
+'@ | ssh -o ServerAliveInterval=15 -i ~/.ssh/seatlock_server deploy@seatlock.fun "cd ~/seatlock && docker compose -f docker-compose.prod.yml exec -T postgres psql -U seatlock -d seatlock -At" | Set-Content loadtest-keys.txt
+(Get-Content loadtest-keys.txt).Count   # сверьте с числом выданных тестовых билетов
+```
 
-# 3. Postgres: cleanup-prod.sql (сначала прогон с ROLLBACK и проверка счётчиков, потом COMMIT)
+**2. Удаление PDF скриптом** [cleanup-minio.sh](cleanup-minio.sh). У предустановленного в контейнере алиаса `local` нет пароля (листинг даёт Access Denied), скрипт задаёт его сам; в образе нет `xargs`, поэтому удаление циклом. **Никогда не используйте `mc rm --recursive` на всём бакете:** там билеты реальных клиентов.
+
+```powershell
+scp -i ~/.ssh/seatlock_server packages\load-test\cleanup-minio.sh loadtest-keys.txt deploy@seatlock.fun:/tmp/
+ssh -i ~/.ssh/seatlock_server deploy@seatlock.fun "sh /tmp/cleanup-minio.sh check"   # покажет 3 файла, иначе дальше не идите
+ssh -o ServerAliveInterval=15 -i ~/.ssh/seatlock_server deploy@seatlock.fun "sh /tmp/cleanup-minio.sh delete /tmp/loadtest-keys.txt"   # удалено: N
+```
+
+**3. Postgres:** сначала репетиция (`ROLLBACK`, только счётчики), затем боевой запуск с заменой на `COMMIT`.
+
+```powershell
+scp -i ~/.ssh/seatlock_server packages\load-test\cleanup-prod.sql deploy@seatlock.fun:/tmp/cleanup-prod.sql
+ssh -i ~/.ssh/seatlock_server deploy@seatlock.fun "cd ~/seatlock && docker compose -f docker-compose.prod.yml exec -T postgres psql -U seatlock -d seatlock < /tmp/cleanup-prod.sql"
+# счётчики сошлись, тогда боевой запуск:
+ssh -i ~/.ssh/seatlock_server deploy@seatlock.fun "cd ~/seatlock && sed 's/^ROLLBACK;.*/COMMIT;/' /tmp/cleanup-prod.sql | docker compose -f docker-compose.prod.yml exec -T postgres psql -U seatlock -d seatlock"
+ssh -i ~/.ssh/seatlock_server deploy@seatlock.fun "rm -f /tmp/cleanup-prod.sql /tmp/cleanup-minio.sh /tmp/loadtest-keys.txt"
 ```
 
 Очередь RabbitMQ после успешного прогона пуста. Если в DLQ что-то есть, сначала посмотрите, чьи это сообщения, и только потом `rabbitmqctl purge_queue`: на проде там могут быть и реальные.
