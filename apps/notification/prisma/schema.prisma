@@ -13,6 +13,10 @@ datasource db {
 enum NotificationStatus {
   SENT
   FAILED
+  // Заказ захвачен воркером и обрабатывается (см. order-paid.consumer.ts, claim()):
+  // другой воркер или дубль сообщения не начнут вторую отправку. claimedAt —
+  // срок аренды: если воркер упал, по истечении аренды заказ захватывается заново.
+  PROCESSING
 }
 
 // Журнал отправок — изначально по ADR 0001 планировался в MongoDB
@@ -27,6 +31,7 @@ model NotificationLog {
   status       NotificationStatus
   errorMessage String?
   pdfKey       String? // ключ объекта в S3, если PDF был загружен
+  claimedAt    DateTime? // когда воркер захватил заказ (аренда для PROCESSING)
   createdAt    DateTime           @default(now())
 
   // Естественный ключ идемпотентности consumer'а: RabbitMQ может

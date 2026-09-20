@@ -6,8 +6,15 @@ import * as http from 'node:http';
 import type { AddressInfo } from 'node:net';
 import request from 'supertest';
 import { AppModule } from './app.module';
+import { replayDeadLetters } from './dlq/replay-dead-letters';
+import { OrderPaidConsumer } from './notifications/order-paid.consumer';
+import { TicketStorageService } from './tickets/ticket-storage.service';
 import { PrismaService } from './prisma/prisma.service';
-import { NOTIFICATION_DLQ, PAYMENT_EVENTS_EXCHANGE } from './rabbitmq/rabbitmq.module';
+import {
+  NOTIFICATION_DLQ,
+  PAYMENT_EVENTS_EXCHANGE,
+  RABBITMQ_CHANNEL,
+} from './rabbitmq/rabbitmq.module';
 
 // Как и payment.integration.spec.ts — настоящее Nest-приложение поверх
 // настоящих Postgres/RabbitMQ/MinIO/Mailpit, auth и catalog подменены
@@ -155,11 +162,13 @@ describe('notification (интеграция, настоящий Nest + Postgres
     await channel.close();
     await connection.close();
 
-    const log = await waitFor(() =>
-      prisma.notificationLog.findUnique({
+    // Строка лога появляется сразу со статусом PROCESSING (захват заказа) — ждём итог.
+    const log = await waitFor(async () => {
+      const row = await prisma.notificationLog.findUnique({
         where: { orderId_type: { orderId, type: 'TICKET_EMAIL' } },
-      }),
-    );
+      });
+      return row && row.status !== 'PROCESSING' ? row : null;
+    });
     expect(log.status).toBe('SENT');
     expect(log.pdfKey).toBe(`tickets/${orderId}.pdf`);
 
@@ -217,12 +226,121 @@ describe('notification (интеграция, настоящий Nest + Postgres
     await dlqChannel.close();
     await dlqConsumer.close();
 
-    const log = await waitFor(() =>
-      prisma.notificationLog.findUnique({
+    // Строка лога появляется сразу со статусом PROCESSING (захват заказа) — ждём итог.
+    const log = await waitFor(async () => {
+      const row = await prisma.notificationLog.findUnique({
         where: { orderId_type: { orderId, type: 'TICKET_EMAIL' } },
-      }),
-    );
+      });
+      return row && row.status !== 'PROCESSING' ? row : null;
+    });
     expect(log.status).toBe('FAILED');
+  });
+
+  it('два воркера одновременно берут один и тот же заказ: письмо одно (атомарный захват)', async () => {
+    const consumer = app.get(OrderPaidConsumer);
+    const channel = app.get<amqp.Channel>(RABBITMQ_CHANNEL);
+    // Сообщение синтетическое (без настоящей доставки от брокера), поэтому
+    // ack/nack подменяем: считаем, что решил каждый из двух обработчиков.
+    const ack = jest.spyOn(channel, 'ack').mockImplementation(() => undefined);
+    const nack = jest.spyOn(channel, 'nack').mockImplementation(() => undefined);
+    // Чужие order.paid (тесты других пакетов на том же RabbitMQ) может разбирать тот
+    // же consumer, поэтому считаем только вызовы по нашему заказу: загрузка PDF
+    // происходит ровно один раз на захваченный заказ, до отправки письма.
+    const upload = jest.spyOn(app.get(TicketStorageService), 'uploadTicket');
+    const orderId = 'order-race-1';
+    const msg = {
+      content: Buffer.from(
+        JSON.stringify({
+          orderId,
+          userId,
+          eventId: 'event-1',
+          seatId: 'seat-1',
+          amountCents: 150000,
+        }),
+      ),
+    } as amqp.ConsumeMessage;
+
+    // mockRestore() сбрасывает историю вызовов, поэтому снимаем её до восстановления.
+    const { ackCount, nackCalls, uploads } = await Promise.all([
+      consumer.handle(msg),
+      consumer.handle(msg),
+    ])
+      .then(() => ({
+        ackCount: ack.mock.calls.filter((call) => call[0] === msg).length,
+        nackCalls: nack.mock.calls.filter((call) => call[0] === msg),
+        uploads: upload.mock.calls.filter((call) => call[0] === orderId).length,
+      }))
+      .finally(() => {
+        ack.mockRestore();
+        nack.mockRestore();
+        upload.mockRestore();
+      });
+
+    const log = await prisma.notificationLog.findUniqueOrThrow({
+      where: { orderId_type: { orderId, type: 'TICKET_EMAIL' } },
+    });
+    expect(log.status).toBe('SENT');
+
+    // Письмо отправляется только после загрузки PDF, а загрузка прошла ровно один раз:
+    // значит и письмо по этому заказу ушло одно.
+    expect(uploads).toBe(1);
+
+    // Оба обработчика приняли решение: один отправил и подтвердил, второй либо
+    // увидел SENT и подтвердил дубль, либо вернул сообщение в очередь, не теряя его.
+    expect(ackCount + nackCalls.length).toBe(2);
+    for (const call of nackCalls) {
+      expect(call).toEqual([msg, false, true]);
+    }
+  });
+
+  it('повторная отправка из DLQ: сообщение возвращается в работу, FAILED-заказ доходит до SENT', async () => {
+    const orderId = 'order-replay-1';
+    await prisma.notificationLog.create({
+      data: {
+        orderId,
+        type: 'TICKET_EMAIL',
+        status: 'FAILED',
+        errorMessage: 'catalog вернул 503',
+      },
+    });
+
+    const connection = await amqp.connect(process.env.RABBITMQ_URL!);
+    const channel = await connection.createConfirmChannel();
+    await channel.purgeQueue(NOTIFICATION_DLQ);
+    channel.sendToQueue(
+      NOTIFICATION_DLQ,
+      Buffer.from(
+        JSON.stringify({
+          orderId,
+          userId,
+          eventId: 'event-1',
+          seatId: 'seat-1',
+          amountCents: 150000,
+        }),
+      ),
+      { persistent: true },
+    );
+    await channel.waitForConfirms();
+
+    // dry-run показывает сообщение, но не переносит его.
+    const dry = await replayDeadLetters(channel, { limit: 10, dryRun: true });
+    expect(dry.orderIds).toEqual([orderId]);
+    expect((await channel.checkQueue(NOTIFICATION_DLQ)).messageCount).toBe(1);
+
+    const result = await replayDeadLetters(channel, { limit: 10, dryRun: false });
+    expect(result.processed).toBe(1);
+
+    const log = await waitFor(async () => {
+      const row = await prisma.notificationLog.findUnique({
+        where: { orderId_type: { orderId, type: 'TICKET_EMAIL' } },
+      });
+      return row?.status === 'SENT' ? row : null;
+    });
+    expect(log.errorMessage).toBeNull();
+    expect((await channel.checkQueue(NOTIFICATION_DLQ)).messageCount).toBe(0);
+
+    await channel.close();
+    await connection.close();
   });
 
   it('GET /metrics — отдаёт метрики в формате Prometheus', async () => {

@@ -7,9 +7,11 @@ import { OrderPaidConsumer } from './order-paid.consumer';
 
 function createPrismaMock() {
   return {
+    // Захват заказа (INSERT ... ON CONFLICT ... RETURNING): непустой результат — захвачен.
+    $queryRaw: jest.fn(),
     notificationLog: {
       findUnique: jest.fn(),
-      upsert: jest.fn(),
+      update: jest.fn(),
     },
   };
 }
@@ -88,20 +90,40 @@ describe('OrderPaidConsumer', () => {
       return Promise.resolve(jsonResponse(null, false, 404));
     });
     global.fetch = fetchMock as unknown as typeof fetch;
+
+    // По умолчанию заказ свободен и захватывается; ожидание при занятом заказе в тестах не ждём.
+    prisma.$queryRaw.mockResolvedValue([{ id: 'log-1' }]);
+    jest
+      .spyOn(consumer as unknown as { sleep: (ms: number) => Promise<void> }, 'sleep')
+      .mockResolvedValue(undefined);
   });
 
   it('уже SENT — сразу ack, без похода за данными', async () => {
+    prisma.$queryRaw.mockResolvedValue([]); // захватить нечего
     prisma.notificationLog.findUnique.mockResolvedValue({ status: 'SENT' });
 
     await consumer.handle(createMsg(event));
 
     expect(fetchMock).not.toHaveBeenCalled();
+    expect(mail.sendTicket).not.toHaveBeenCalled();
     expect(channel.ack).toHaveBeenCalledTimes(1);
+    expect(channel.nack).not.toHaveBeenCalled();
+  });
+
+  it('заказ сейчас обрабатывает другой воркер — письмо не шлём, сообщение возвращаем в очередь (не теряем)', async () => {
+    prisma.$queryRaw.mockResolvedValue([]);
+    prisma.notificationLog.findUnique.mockResolvedValue({ status: 'PROCESSING' });
+    const msg = createMsg(event);
+
+    await consumer.handle(msg);
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(mail.sendTicket).not.toHaveBeenCalled();
+    expect(channel.ack).not.toHaveBeenCalled();
+    expect(channel.nack).toHaveBeenCalledWith(msg, false, true);
   });
 
   it('happy path — письмо с PDF отправлено, лог SENT, ack', async () => {
-    prisma.notificationLog.findUnique.mockResolvedValue(null);
-
     await consumer.handle(createMsg(event));
 
     expect(pdf.generate).toHaveBeenCalledWith(
@@ -111,15 +133,16 @@ describe('OrderPaidConsumer', () => {
     expect(mail.sendTicket).toHaveBeenCalledWith(
       expect.objectContaining({ to: 'buyer@seatlock.fun' }),
     );
-    expect(prisma.notificationLog.upsert).toHaveBeenCalledWith(
-      expect.objectContaining({ create: expect.objectContaining({ status: 'SENT' }) }),
+    expect(prisma.notificationLog.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ status: 'SENT', claimedAt: null }),
+      }),
     );
     expect(channel.ack).toHaveBeenCalledTimes(1);
     expect(channel.nack).not.toHaveBeenCalled();
   });
 
   it('catalog недоступен — лог FAILED, nack без реквеста (уходит в DLQ)', async () => {
-    prisma.notificationLog.findUnique.mockResolvedValue(null);
     fetchMock.mockImplementation((url: string) => {
       if (url.includes('/internal/users/')) {
         return Promise.resolve(jsonResponse({ id: event.userId, email: 'buyer@seatlock.fun' }));
@@ -130,8 +153,10 @@ describe('OrderPaidConsumer', () => {
     await consumer.handle(createMsg(event));
 
     expect(mail.sendTicket).not.toHaveBeenCalled();
-    expect(prisma.notificationLog.upsert).toHaveBeenCalledWith(
-      expect.objectContaining({ create: expect.objectContaining({ status: 'FAILED' }) }),
+    expect(prisma.notificationLog.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ status: 'FAILED', claimedAt: null }),
+      }),
     );
     expect(channel.nack).toHaveBeenCalledWith(expect.anything(), false, false);
     expect(channel.ack).not.toHaveBeenCalled();
@@ -142,7 +167,7 @@ describe('OrderPaidConsumer', () => {
 
     await consumer.handle(msg);
 
-    expect(prisma.notificationLog.findUnique).not.toHaveBeenCalled();
+    expect(prisma.$queryRaw).not.toHaveBeenCalled();
     expect(channel.nack).toHaveBeenCalledWith(msg, false, false);
   });
 });

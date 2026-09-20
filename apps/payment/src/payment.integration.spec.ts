@@ -172,9 +172,13 @@ describe('payment (интеграция, настоящий Nest + настоя�
     const rabbitChannel = await rabbitConnection.createChannel();
     const { queue } = await rabbitChannel.assertQueue('', { exclusive: true });
     await rabbitChannel.bindQueue(queue, PAYMENT_EVENTS_EXCHANGE, 'order.paid');
+    // Тесты других пакетов идут параллельно на том же RabbitMQ и публикуют свои
+    // order.paid — берём только событие своего заказа.
     const delivery = new Promise<amqp.ConsumeMessage>((resolve) => {
       void rabbitChannel.consume(queue, (msg) => {
-        if (msg) resolve(msg);
+        if (!msg) return;
+        const body = JSON.parse(msg.content.toString('utf-8')) as { orderId?: string };
+        if (body.orderId === orderId) resolve(msg);
       });
     });
 
