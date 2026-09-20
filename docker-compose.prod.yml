@@ -135,6 +135,10 @@ services:
       # fake — реальный провайдер ещё не выбран (Stripe недоступен из
       # Беларуси — санкции). См. apps/payment/src/providers.
       PAYMENT_PROVIDER: fake
+      # Осознанный демо-режим: деньги не списываются (docs/adr/0004). Убрать
+      # эту строку при подключении реального провайдера — без неё fake в
+      # production не стартует.
+      ALLOW_FAKE_PAYMENTS: 'true'
       STRIPE_SECRET_KEY: ${STRIPE_SECRET_KEY:-}
       STRIPE_WEBHOOK_SECRET: ${STRIPE_WEBHOOK_SECRET:-}
       OTEL_EXPORTER_OTLP_ENDPOINT: http://jaeger:4318
