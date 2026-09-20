@@ -115,16 +115,24 @@ export const options = {
     // поиск предела, а не проверка "прошёл/не прошёл". Порог здесь лишь
     // чтобы итоговый отчёт явно подсветил, если реальных 5xx/сетевых
     // сбоев стало заметно много.
-    http_req_failed: ABORT_ON_DEGRADATION
+    //
+    // Пороги только по запросам самой нагрузки (тег flow:stress), а не по
+    // всем: запросы setup() (создание залов и 500 мест по WAN) тоже попадают в
+    // http_req_duration, и их медленный p95 останавливал тест ещё до старта
+    // нагрузки.
+    'http_req_failed{flow:stress}': ABORT_ON_DEGRADATION
       ? [{ threshold: 'rate<0.10', abortOnFail: true, delayAbortEval: '20s' }]
       : ['rate<0.10'],
     ...(ABORT_ON_DEGRADATION && {
-      http_req_duration: [
+      'http_req_duration{flow:stress}': [
         { threshold: `p(95)<${ABORT_P95_MS}`, abortOnFail: true, delayAbortEval: '20s' },
       ],
     }),
   },
 };
+
+// Тег для порогов: отличает запросы нагрузки от запросов setup().
+const FLOW_TAG = { flow: 'stress' };
 
 const stageOutcomes = new Counter('stress_stage_outcomes');
 
@@ -149,7 +157,7 @@ export default function (data) {
   const holdRes = http.post(
     `${GATEWAY_URL}/api/booking/events/${event.eventId}/holds`,
     JSON.stringify({ seatId }),
-    { headers },
+    { headers, tags: FLOW_TAG },
   );
   const holdOk = check(holdRes, {
     'холд: ожидаемый статус (201/409), не 5xx/обрыв': (r) => r.status === 201 || r.status === 409,
@@ -169,7 +177,7 @@ export default function (data) {
   const orderRes = http.post(
     `${GATEWAY_URL}/api/payment/orders`,
     JSON.stringify({ eventId: event.eventId, seatId }),
-    { headers },
+    { headers, tags: FLOW_TAG },
   );
   const orderOk = check(orderRes, {
     'заказ: ожидаемый статус (201/403/409), не 5xx/обрыв': (r) =>
@@ -196,7 +204,7 @@ export default function (data) {
   const webhookRes = http.post(
     `${GATEWAY_URL}/api/payment/dev/fake-webhook`,
     JSON.stringify({ providerIntentId: order.providerIntentId, type: 'payment.succeeded' }),
-    { headers: { 'Content-Type': 'application/json' } },
+    { headers: { 'Content-Type': 'application/json' }, tags: FLOW_TAG },
   );
   const webhookOk = check(webhookRes, {
     'вебхук принят (200), не 5xx/обрыв': (r) => r.status === 200,
