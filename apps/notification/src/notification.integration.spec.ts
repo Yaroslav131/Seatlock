@@ -8,6 +8,7 @@ import request from 'supertest';
 import { AppModule } from './app.module';
 import { replayDeadLetters } from './dlq/replay-dead-letters';
 import { OrderPaidConsumer } from './notifications/order-paid.consumer';
+import { TicketStorageService } from './tickets/ticket-storage.service';
 import { PrismaService } from './prisma/prisma.service';
 import {
   NOTIFICATION_DLQ,
@@ -242,6 +243,10 @@ describe('notification (интеграция, настоящий Nest + Postgres
     // ack/nack подменяем: считаем, что решил каждый из двух обработчиков.
     const ack = jest.spyOn(channel, 'ack').mockImplementation(() => undefined);
     const nack = jest.spyOn(channel, 'nack').mockImplementation(() => undefined);
+    // Чужие order.paid (тесты других пакетов на том же RabbitMQ) может разбирать тот
+    // же consumer, поэтому считаем только вызовы по нашему заказу: загрузка PDF
+    // происходит ровно один раз на захваченный заказ, до отправки письма.
+    const upload = jest.spyOn(app.get(TicketStorageService), 'uploadTicket');
     const orderId = 'order-race-1';
     const msg = {
       content: Buffer.from(
@@ -256,11 +261,19 @@ describe('notification (интеграция, настоящий Nest + Postgres
     } as amqp.ConsumeMessage;
 
     // mockRestore() сбрасывает историю вызовов, поэтому снимаем её до восстановления.
-    const { ackCount, nackCalls } = await Promise.all([consumer.handle(msg), consumer.handle(msg)])
-      .then(() => ({ ackCount: ack.mock.calls.length, nackCalls: [...nack.mock.calls] }))
+    const { ackCount, nackCalls, uploads } = await Promise.all([
+      consumer.handle(msg),
+      consumer.handle(msg),
+    ])
+      .then(() => ({
+        ackCount: ack.mock.calls.filter((call) => call[0] === msg).length,
+        nackCalls: nack.mock.calls.filter((call) => call[0] === msg),
+        uploads: upload.mock.calls.filter((call) => call[0] === orderId).length,
+      }))
       .finally(() => {
         ack.mockRestore();
         nack.mockRestore();
+        upload.mockRestore();
       });
 
     const log = await prisma.notificationLog.findUniqueOrThrow({
@@ -268,13 +281,9 @@ describe('notification (интеграция, настоящий Nest + Postgres
     });
     expect(log.status).toBe('SENT');
 
-    const mailpitMessages = (await (await fetch(`${MAILPIT_API}/messages`)).json()) as {
-      messages: Array<{ To: Array<{ Address: string }> }>;
-    };
-    const toBuyer = mailpitMessages.messages.filter((m) =>
-      m.To.some((to) => to.Address === upstreamState.email),
-    );
-    expect(toBuyer).toHaveLength(1);
+    // Письмо отправляется только после загрузки PDF, а загрузка прошла ровно один раз:
+    // значит и письмо по этому заказу ушло одно.
+    expect(uploads).toBe(1);
 
     // Оба обработчика приняли решение: один отправил и подтвердил, второй либо
     // увидел SENT и подтвердил дубль, либо вернул сообщение в очередь, не теряя его.
