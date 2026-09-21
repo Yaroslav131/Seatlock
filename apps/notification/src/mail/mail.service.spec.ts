@@ -51,6 +51,25 @@ describe('MailService', () => {
     );
   });
 
+  it('SMTP-соединения переиспользуются (pool), их число равно NOTIFICATION_PREFETCH', () => {
+    new MailService(
+      createConfigMock({ SMTP_HOST: 'localhost', NOTIFICATION_PREFETCH: '4' }) as never,
+    );
+
+    expect(createTransportMock).toHaveBeenCalledWith(
+      expect.objectContaining({ pool: true, maxConnections: 4 }),
+    );
+  });
+
+  it('при остановке закрывает пул соединений', () => {
+    const close = jest.fn();
+    createTransportMock.mockReturnValue({ sendMail: jest.fn(), close });
+
+    new MailService(createConfigMock({ SMTP_HOST: 'localhost' }) as never).onModuleDestroy();
+
+    expect(close).toHaveBeenCalledTimes(1);
+  });
+
   describe('sendTicket', () => {
     const pdf = Buffer.from('pdf');
     let sendMail: jest.Mock;
