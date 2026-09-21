@@ -7,6 +7,14 @@ export const orderPaidProcessedTotal = new Counter({
   labelNames: ['result'],
 });
 
+// Откуда взяты данные билета: snapshot — из события order.paid (без сетевых вызовов),
+// legacy — по-старому через catalog и auth (событие от старой версии payment).
+export const ticketDataSourceTotal = new Counter({
+  name: 'ticket_data_source_total',
+  help: 'Источник данных билета при обработке order.paid',
+  labelNames: ['source'],
+});
+
 // Письма, которые сознательно не отправлены: получатель на зарезервированном
 // домене нагрузочного теста (см. mail.service.ts). PDF и загрузка в S3 для
 // них выполняются как обычно.

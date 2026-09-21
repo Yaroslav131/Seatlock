@@ -34,6 +34,7 @@ function signToken(sub: string, role: 'USER' | 'ORGANIZER' | 'ADMIN' = 'USER'): 
 }
 
 interface UpstreamState {
+  ticketInfo: Record<string, unknown> | null;
   hold: { seatId: string; expiresAt: string } | null;
   event: { status: string; basePriceCents: number; organizerId: string };
 }
@@ -69,6 +70,16 @@ describe('payment (интеграция, настоящий Nest + настоя�
         res.end();
         return;
       }
+      if (req.method === 'GET' && url.endsWith('/ticket-info')) {
+        if (!upstreamState.ticketInfo) {
+          res.writeHead(404, { 'content-type': 'application/json' });
+          res.end(JSON.stringify({ message: 'нет' }));
+          return;
+        }
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(JSON.stringify(upstreamState.ticketInfo));
+        return;
+      }
       if (req.method === 'GET' && url.includes('/api/catalog/events/')) {
         res.writeHead(200, { 'content-type': 'application/json' });
         res.end(JSON.stringify(upstreamState.event));
@@ -97,6 +108,16 @@ describe('payment (интеграция, настоящий Nest + настоя�
 
   beforeEach(async () => {
     upstreamState = {
+      ticketInfo: {
+        eventTitle: 'Концерт',
+        startsAt: '2026-12-20T19:00:00.000Z',
+        venueName: 'Дворец спорта',
+        venueCity: 'Минск',
+        venueAddress: 'пр. Победителей, 1',
+        seatSection: 'A',
+        seatRow: 3,
+        seatNumber: 12,
+      },
       hold: { seatId, expiresAt: new Date(Date.now() + 5 * 60_000).toISOString() },
       event: { status: 'PUBLISHED', basePriceCents: 150000, organizerId: 'organizer-1' },
     };
@@ -364,6 +385,54 @@ describe('payment (интеграция, настоящий Nest + настоя�
 
     expect(messageCount).toBe(total);
     expect(await prisma.outboxEvent.count({ where: { publishedAt: null } })).toBe(0);
+  });
+
+  it('снимок билета: email из токена и данные каталога сохраняются в заказе и уходят в order.paid', async () => {
+    const token = signToken('user-1');
+    const created = await request(app.getHttpServer())
+      .post('/api/payment/orders')
+      .set('Authorization', `Bearer ${token}`)
+      .send({ eventId, seatId })
+      .expect(201);
+
+    const expected = { buyerEmail: 'user-1@seatlock.fun', ...upstreamState.ticketInfo };
+    const stored = await prisma.order.findUniqueOrThrow({ where: { id: created.body.id } });
+    expect(stored.ticketSnapshot).toEqual(expected);
+    // Снимок с email в ответе API не светится.
+    expect(created.body).not.toHaveProperty('ticketSnapshot');
+
+    await request(app.getHttpServer())
+      .post('/api/payment/dev/fake-webhook')
+      .send({ providerIntentId: created.body.providerIntentId, type: 'payment.succeeded' })
+      .expect(200);
+
+    const outboxRow = await prisma.outboxEvent.findFirstOrThrow({
+      where: { eventType: 'order.paid' },
+    });
+    expect(outboxRow.payload).toMatchObject({ orderId: created.body.id, ticket: expected });
+  });
+
+  it('каталог не отдал данные билета — заказ создаётся без снимка, order.paid без поля ticket', async () => {
+    upstreamState.ticketInfo = null; // ticket-info ответит 404
+    const token = signToken('user-1');
+    const created = await request(app.getHttpServer())
+      .post('/api/payment/orders')
+      .set('Authorization', `Bearer ${token}`)
+      .send({ eventId, seatId })
+      .expect(201);
+
+    const stored = await prisma.order.findUniqueOrThrow({ where: { id: created.body.id } });
+    expect(stored.ticketSnapshot).toBeNull();
+
+    await request(app.getHttpServer())
+      .post('/api/payment/dev/fake-webhook')
+      .send({ providerIntentId: created.body.providerIntentId, type: 'payment.succeeded' })
+      .expect(200);
+
+    const outboxRow = await prisma.outboxEvent.findFirstOrThrow({
+      where: { eventType: 'order.paid' },
+    });
+    expect(outboxRow.payload).not.toHaveProperty('ticket');
   });
 
   it('GET /metrics — отдаёт метрики в формате Prometheus', async () => {

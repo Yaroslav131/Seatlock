@@ -42,6 +42,11 @@ model Order {
   status           OrderStatus @default(PENDING)
   providerIntentId String?     @unique
   providerRefundId String?
+  // Данные билета на момент заказа (email покупателя из JWT, событие, зал, место):
+  // уходят в order.paid, чтобы notification не ходил за ними по сети. Null у
+  // заказов, созданных до появления поля, или если каталог не ответил (тогда
+  // notification берёт данные по-старому). См. docs/adr/0005.
+  ticketSnapshot   Json?
   createdAt        DateTime    @default(now())
   updatedAt        DateTime    @updatedAt
 

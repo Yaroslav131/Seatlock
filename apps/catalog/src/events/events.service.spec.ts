@@ -6,6 +6,7 @@ import { EventsService } from './events.service';
 function createPrismaMock() {
   return {
     venue: { findUnique: jest.fn() },
+    seat: { findFirst: jest.fn() },
     event: {
       create: jest.fn(),
       findUnique: jest.fn(),
@@ -118,6 +119,58 @@ describe('EventsService', () => {
         orderBy: { createdAt: 'desc' },
       });
       expect(events).toEqual([{ id: 'e1', organizerId: 'organizer-1' }]);
+    });
+  });
+
+  describe('findTicketInfo', () => {
+    const event = {
+      title: 'Концерт',
+      startsAt: new Date('2026-12-20T19:00:00.000Z'),
+      venueId: 'venue-1',
+      venue: { name: 'Дворец спорта', city: 'Минск', address: 'пр. Победителей, 1' },
+    };
+
+    it('собирает событие, зал и место в один ответ', async () => {
+      prisma.event.findUnique.mockResolvedValue(event);
+      prisma.seat.findFirst.mockResolvedValue({ section: 'A', row: 3, number: 12 });
+
+      const info = await service.findTicketInfo('event-1', 'seat-1');
+
+      expect(info).toEqual({
+        eventTitle: 'Концерт',
+        startsAt: '2026-12-20T19:00:00.000Z',
+        venueName: 'Дворец спорта',
+        venueCity: 'Минск',
+        venueAddress: 'пр. Победителей, 1',
+        seatSection: 'A',
+        seatRow: 3,
+        seatNumber: 12,
+      });
+    });
+
+    it('место ищется только среди мест зала этого события', async () => {
+      prisma.event.findUnique.mockResolvedValue(event);
+      prisma.seat.findFirst.mockResolvedValue({ section: null, row: 1, number: 1 });
+
+      await service.findTicketInfo('event-1', 'seat-1');
+
+      expect(prisma.seat.findFirst).toHaveBeenCalledWith(
+        expect.objectContaining({ where: { id: 'seat-1', venueId: 'venue-1' } }),
+      );
+    });
+
+    it('нет события — 404, к местам не ходим', async () => {
+      prisma.event.findUnique.mockResolvedValue(null);
+
+      await expect(service.findTicketInfo('event-1', 'seat-1')).rejects.toThrow(NotFoundException);
+      expect(prisma.seat.findFirst).not.toHaveBeenCalled();
+    });
+
+    it('места нет в зале этого события — 404', async () => {
+      prisma.event.findUnique.mockResolvedValue(event);
+      prisma.seat.findFirst.mockResolvedValue(null);
+
+      await expect(service.findTicketInfo('event-1', 'seat-x')).rejects.toThrow(NotFoundException);
     });
   });
 

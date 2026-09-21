@@ -142,6 +142,51 @@ describe('OrderPaidConsumer', () => {
     expect(channel.nack).not.toHaveBeenCalled();
   });
 
+  describe('снимок билета в событии', () => {
+    const ticket = {
+      buyerEmail: 'snapshot@seatlock.fun',
+      eventTitle: 'Из снимка',
+      startsAt: '2026-12-20T19:00:00.000Z',
+      venueName: 'Арена',
+      venueCity: 'Гомель',
+      venueAddress: 'ул. Советская, 5',
+      seatSection: null,
+      seatRow: 7,
+      seatNumber: 9,
+    };
+
+    it('есть снимок — билет и письмо без единого сетевого вызова (ни catalog, ни auth)', async () => {
+      await consumer.handle(createMsg({ ...event, ticket }));
+
+      expect(fetchMock).not.toHaveBeenCalled();
+      expect(pdf.generate).toHaveBeenCalledWith(
+        expect.objectContaining({
+          orderId: event.orderId,
+          eventTitle: 'Из снимка',
+          venueCity: 'Гомель',
+          seatSection: null,
+          seatRow: 7,
+          seatNumber: 9,
+          amountCents: event.amountCents,
+          startsAt: new Date('2026-12-20T19:00:00.000Z'),
+        }),
+      );
+      expect(mail.sendTicket).toHaveBeenCalledWith(
+        expect.objectContaining({ to: 'snapshot@seatlock.fun' }),
+      );
+      expect(channel.ack).toHaveBeenCalledTimes(1);
+    });
+
+    it('снимок битый — запасной путь: данные берутся из catalog и auth', async () => {
+      await consumer.handle(createMsg({ ...event, ticket: { buyerEmail: 'x@y.z' } }));
+
+      expect(fetchMock).toHaveBeenCalled();
+      expect(mail.sendTicket).toHaveBeenCalledWith(
+        expect.objectContaining({ to: 'buyer@seatlock.fun' }),
+      );
+    });
+  });
+
   it('catalog недоступен — лог FAILED, nack без реквеста (уходит в DLQ)', async () => {
     fetchMock.mockImplementation((url: string) => {
       if (url.includes('/internal/users/')) {

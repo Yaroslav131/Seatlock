@@ -18,7 +18,10 @@ export const RABBITMQ_CHANNEL = Symbol('RABBITMQ_CHANNEL');
 // потери — mandatory:true при публикации (см. outbox-publisher.service.ts):
 // брокер explicit вернёт недоставленное сообщение обратно, и паблишер
 // хотя бы залогирует это, а не тихо пометит publishedAt.
-export const PAYMENT_EVENTS_EXCHANGE = 'payment.events';
+// Имя можно переопределить переменной окружения — так интеграционные тесты
+// payment и notification, которые бегут параллельно на одном брокере, не
+// подмешивают друг другу сообщения (см. jest.setup.js в каждом пакете).
+export const PAYMENT_EVENTS_EXCHANGE = process.env.PAYMENT_EVENTS_EXCHANGE ?? 'payment.events';
 
 @Global()
 @Module({

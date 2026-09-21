@@ -95,6 +95,46 @@ describe('PaymentWebhookService', () => {
     );
   });
 
+  it('order.paid несёт снимок билета из заказа (notification выдаёт билет без сетевых вызовов)', async () => {
+    provider.verifyWebhookSignature.mockReturnValue({
+      type: 'payment.succeeded',
+      providerIntentId,
+    });
+    const ticketSnapshot = {
+      buyerEmail: 'buyer@seatlock.fun',
+      eventTitle: 'Концерт',
+      startsAt: '2026-12-20T19:00:00.000Z',
+      venueName: 'Дворец спорта',
+      venueCity: 'Минск',
+      venueAddress: 'пр. Победителей, 1',
+      seatSection: null,
+      seatRow: 3,
+      seatNumber: 12,
+    };
+    prisma.order.findUnique.mockResolvedValue({ ...pendingOrder, ticketSnapshot });
+
+    await service.handle(Buffer.from('{}'), 'sig');
+
+    expect(outbox.record).toHaveBeenCalledWith(
+      expect.anything(),
+      'order.paid',
+      expect.objectContaining({ ticket: ticketSnapshot }),
+    );
+  });
+
+  it('у заказа без снимка order.paid уходит без поля ticket (старый путь notification)', async () => {
+    provider.verifyWebhookSignature.mockReturnValue({
+      type: 'payment.succeeded',
+      providerIntentId,
+    });
+    prisma.order.findUnique.mockResolvedValue({ ...pendingOrder, ticketSnapshot: null });
+
+    await service.handle(Buffer.from('{}'), 'sig');
+
+    const payload = outbox.record.mock.calls[0][2] as Record<string, unknown>;
+    expect(payload).not.toHaveProperty('ticket');
+  });
+
   it('повторная доставка payment.succeeded для уже PAID-заказа — идемпотентна, не пишет outbox снова', async () => {
     provider.verifyWebhookSignature.mockReturnValue({
       type: 'payment.succeeded',

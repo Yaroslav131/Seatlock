@@ -1,7 +1,7 @@
 import { BadRequestException, Inject, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import * as jwt from 'jsonwebtoken';
-import { Order } from '../generated/prisma';
+import { Order, Prisma } from '../generated/prisma';
 import { OutboxService } from '../outbox/outbox.service';
 import { PaymentProviderPort, PAYMENT_PROVIDER } from '../providers/payment-provider.port';
 import { PrismaService } from '../prisma/prisma.service';
@@ -68,6 +68,10 @@ export class PaymentWebhookService {
         // Нужно notification для PDF-билета/письма — эти данные уже
         // есть в памяти на этот момент, лишнего похода за ними не надо.
         amountCents: order.amountCents,
+        // Снимок билета из заказа (email, событие, зал, место): notification
+        // выдаёт билет без единого сетевого вызова. Нет снимка — поле опускается,
+        // и notification берёт данные по-старому (docs/adr/0005).
+        ...(order.ticketSnapshot ? { ticket: order.ticketSnapshot as Prisma.InputJsonObject } : {}),
       });
     });
 

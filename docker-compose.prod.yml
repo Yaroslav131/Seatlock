@@ -202,6 +202,9 @@ services:
       SMTP_SECURE: 'true'
       SMTP_USER: resend
       SMTP_PASSWORD: ${RESEND_API_KEY}
+      # Сколько писем обрабатывается одновременно (и сколько SMTP-соединений в пуле).
+      # Потолок — лимит Resend, 10 запросов/с на команду, см. docs/adr/0006.
+      NOTIFICATION_PREFETCH: 3
       OTEL_EXPORTER_OTLP_ENDPOINT: http://jaeger:4318
     # Порт наружу не публикуем — как и payment, у notification нет
     # публичного HTTP API, gateway его не проксирует.
