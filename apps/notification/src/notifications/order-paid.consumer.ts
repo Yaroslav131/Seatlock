@@ -2,10 +2,11 @@ import { Inject, Injectable, Logger, OnApplicationBootstrap } from '@nestjs/comm
 import { ConfigService } from '@nestjs/config';
 import * as amqp from 'amqplib';
 import { MailService } from '../mail/mail.service';
-import { orderPaidProcessedTotal } from '../metrics/business-metrics';
+import { orderPaidProcessedTotal, ticketDataSourceTotal } from '../metrics/business-metrics';
 import { PrismaService } from '../prisma/prisma.service';
 import { ORDER_PAID_QUEUE, RABBITMQ_CHANNEL } from '../rabbitmq/rabbitmq.module';
 import { TicketData, TicketPdfService } from '../tickets/ticket-pdf.service';
+import { parseTicketSnapshot } from '../tickets/ticket-snapshot';
 import { TicketStorageService } from '../tickets/ticket-storage.service';
 
 interface OrderPaidEvent {
@@ -14,6 +15,8 @@ interface OrderPaidEvent {
   eventId: string;
   seatId: string;
   amountCents: number;
+  /** Снимок билета от payment (docs/adr/0005); у событий старой версии отсутствует. */
+  ticket?: unknown;
 }
 
 interface CatalogEvent {
@@ -101,10 +104,7 @@ export class OrderPaidConsumer implements OnApplicationBootstrap {
     }
 
     try {
-      const [{ email }, ticketData] = await Promise.all([
-        this.fetchUserEmail(event.userId),
-        this.buildTicketData(event),
-      ]);
+      const { email, ticketData } = await this.resolveTicket(event);
 
       const pdf = await this.pdf.generate(ticketData);
       const pdfKey = await this.storage.uploadTicket(event.orderId, pdf);
@@ -162,6 +162,43 @@ export class OrderPaidConsumer implements OnApplicationBootstrap {
 
   private sleep(ms: number): Promise<void> {
     return new Promise((resolve) => setTimeout(resolve, ms));
+  }
+
+  /**
+   * Данные билета и адрес покупателя. Основной путь: снимок из самого события,
+   * ни одного сетевого вызова. Запасной: событие от старой версии payment (в
+   * очереди или outbox при деплое) не несёт снимка, и данные берутся по-старому
+   * из catalog и auth.
+   */
+  private async resolveTicket(
+    event: OrderPaidEvent,
+  ): Promise<{ email: string; ticketData: TicketData }> {
+    const snapshot = parseTicketSnapshot(event.ticket);
+    if (snapshot) {
+      ticketDataSourceTotal.inc({ source: 'snapshot' });
+      return {
+        email: snapshot.buyerEmail,
+        ticketData: {
+          orderId: event.orderId,
+          eventTitle: snapshot.eventTitle,
+          startsAt: new Date(snapshot.startsAt),
+          venueName: snapshot.venueName,
+          venueCity: snapshot.venueCity,
+          venueAddress: snapshot.venueAddress,
+          seatSection: snapshot.seatSection,
+          seatRow: snapshot.seatRow,
+          seatNumber: snapshot.seatNumber,
+          amountCents: event.amountCents,
+        },
+      };
+    }
+
+    ticketDataSourceTotal.inc({ source: 'legacy' });
+    const [{ email }, ticketData] = await Promise.all([
+      this.fetchUserEmail(event.userId),
+      this.buildTicketData(event),
+    ]);
+    return { email, ticketData };
   }
 
   private async fetchUserEmail(userId: string): Promise<{ email: string }> {

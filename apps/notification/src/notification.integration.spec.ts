@@ -38,6 +38,18 @@ interface UpstreamState {
   event: { title: string; startsAt: string; venueId: string } | null;
   venue: { name: string; city: string; address: string };
   seats: Array<{ id: string; section: string | null; row: number; number: number }>;
+  /** URL всех запросов, дошедших до фейкового catalog/auth (снимок билета должен обходиться без них). */
+  requestedUrls: string[];
+}
+
+function defaultUpstreamState(): UpstreamState {
+  return {
+    email: 'buyer@seatlock.fun',
+    event: { title: 'Тестовый концерт', startsAt: '2026-12-01T19:00:00.000Z', venueId: 'venue-1' },
+    venue: { name: 'Дворец спорта', city: 'Минск', address: 'пр. Победителей, 1' },
+    seats: [{ id: 'seat-1', section: 'A', row: 3, number: 12 }],
+    requestedUrls: [],
+  };
 }
 
 async function waitFor<T>(fn: () => Promise<T | null>, timeoutMs = 10_000): Promise<T> {
@@ -55,7 +67,9 @@ describe('notification (интеграция, настоящий Nest + Postgres
 
   let app: INestApplication;
   let upstream: http.Server;
-  let upstreamState: UpstreamState;
+  // Инициализируем сразу: consumer начинает разбирать очередь при старте приложения,
+  // раньше первого beforeEach, и в очереди могут лежать сообщения других прогонов.
+  let upstreamState: UpstreamState = defaultUpstreamState();
   let prisma: PrismaService;
   let s3: S3Client;
 
@@ -64,6 +78,7 @@ describe('notification (интеграция, настоящий Nest + Postgres
   beforeAll(async () => {
     upstream = http.createServer((req, res) => {
       const url = req.url ?? '';
+      upstreamState.requestedUrls.push(url);
       if (req.method === 'GET' && url.includes('/internal/users/')) {
         res.writeHead(200, { 'content-type': 'application/json' });
         res.end(JSON.stringify({ id: userId, email: upstreamState.email }));
@@ -117,16 +132,7 @@ describe('notification (интеграция, настоящий Nest + Postgres
   });
 
   beforeEach(async () => {
-    upstreamState = {
-      email: 'buyer@seatlock.fun',
-      event: {
-        title: 'Тестовый концерт',
-        startsAt: '2026-12-01T19:00:00.000Z',
-        venueId: 'venue-1',
-      },
-      venue: { name: 'Дворец спорта', city: 'Минск', address: 'пр. Победителей, 1' },
-      seats: [{ id: 'seat-1', section: 'A', row: 3, number: 12 }],
-    };
+    upstreamState = defaultUpstreamState();
     await prisma.notificationLog.deleteMany();
     await fetch(`${MAILPIT_API}/messages`, { method: 'DELETE' });
   });
@@ -234,6 +240,71 @@ describe('notification (интеграция, настоящий Nest + Postgres
       return row && row.status !== 'PROCESSING' ? row : null;
     });
     expect(log.status).toBe('FAILED');
+  });
+
+  it('order.paid со снимком билета: PDF, объект в MinIO и лог SENT без единого запроса к catalog и auth', async () => {
+    const orderId = 'order-snapshot-1';
+    // Уникальные id: параллельные тесты других пакетов могут гонять через тот же
+    // consumer свои сообщения и обращаться к фейковому catalog/auth — считаем
+    // только запросы, относящиеся к нашему заказу.
+    const snapshotEventId = 'event-snapshot-1';
+    const snapshotUserId = '44444444-4444-4444-8444-444444444444';
+    const email = `snapshot-${Date.now()}@seatlock.fun`;
+    const connection = await amqp.connect(process.env.RABBITMQ_URL!);
+    const channel = await connection.createChannel();
+    channel.publish(
+      PAYMENT_EVENTS_EXCHANGE,
+      'order.paid',
+      Buffer.from(
+        JSON.stringify({
+          orderId,
+          userId: snapshotUserId,
+          eventId: snapshotEventId,
+          seatId: 'seat-1',
+          amountCents: 150000,
+          ticket: {
+            buyerEmail: email,
+            eventTitle: 'Концерт из снимка',
+            startsAt: '2026-12-01T19:00:00.000Z',
+            venueName: 'Дворец спорта',
+            venueCity: 'Минск',
+            venueAddress: 'пр. Победителей, 1',
+            seatSection: 'A',
+            seatRow: 3,
+            seatNumber: 12,
+          },
+        }),
+      ),
+      { persistent: true, contentType: 'application/json' },
+    );
+    await channel.close();
+    await connection.close();
+
+    const log = await waitFor(async () => {
+      const row = await prisma.notificationLog.findUnique({
+        where: { orderId_type: { orderId, type: 'TICKET_EMAIL' } },
+      });
+      return row && row.status !== 'PROCESSING' ? row : null;
+    });
+    expect(log.status).toBe('SENT');
+    expect(log.pdfKey).toBe(`tickets/${orderId}.pdf`);
+
+    const s3Object = await s3.send(
+      new GetObjectCommand({ Bucket: process.env.S3_BUCKET, Key: `tickets/${orderId}.pdf` }),
+    );
+    expect(s3Object.ContentLength).toBeGreaterThan(0);
+
+    const mailpitMessages = (await (await fetch(`${MAILPIT_API}/messages`)).json()) as {
+      messages: Array<{ To: Array<{ Address: string }> }>;
+    };
+    expect(mailpitMessages.messages.some((m) => m.To.some((to) => to.Address === email))).toBe(
+      true,
+    );
+    // К catalog и auth по этому заказу никто не ходил.
+    const ownRequests = upstreamState.requestedUrls.filter(
+      (url) => url.includes(snapshotEventId) || url.includes(snapshotUserId),
+    );
+    expect(ownRequests).toEqual([]);
   });
 
   it('два воркера одновременно берут один и тот же заказ: письмо одно (атомарный захват)', async () => {

@@ -59,6 +59,9 @@
     "transform": {
       "^.+\\.ts$": "ts-jest"
     },
+    "setupFiles": [
+      "<rootDir>/jest.setup.js"
+    ],
     "testRegex": ".*\\.spec\\.ts$",
     "modulePathIgnorePatterns": [
       "<rootDir>/dist"

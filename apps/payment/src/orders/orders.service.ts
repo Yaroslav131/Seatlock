@@ -7,6 +7,7 @@ import {
   ServiceUnavailableException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { Logger } from '@nestjs/common';
 import { AuthenticatedUser } from '../auth/jwt-auth.guard';
 import { Order, Prisma } from '../generated/prisma';
 import { ordersCreatedTotal } from '../metrics/business-metrics';
@@ -14,6 +15,7 @@ import { OutboxService } from '../outbox/outbox.service';
 import { PaymentProviderPort, PAYMENT_PROVIDER } from '../providers/payment-provider.port';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateOrderDto } from './dto/create-order.dto';
+import { CatalogTicketInfo, parseCatalogTicketInfo, TicketSnapshot } from './ticket-snapshot';
 
 interface MyHold {
   seatId: string;
@@ -30,6 +32,8 @@ const CURRENCY = 'usd';
 
 @Injectable()
 export class OrdersService {
+  private readonly logger = new Logger(OrdersService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly config: ConfigService,
@@ -69,7 +73,13 @@ export class OrdersService {
       throw new ForbiddenException('Вы не держите это место — сначала займите его на карте зала');
     }
 
-    const event = await this.fetchEvent(dto.eventId);
+    // Данные билета берём тем же походом в каталог, параллельно с проверкой
+    // события: задержка заказа не растёт. Это необязательный снимок, а не условие
+    // заказа: если каталог не ответил, заказ создаётся без него.
+    const [event, ticketInfo] = await Promise.all([
+      this.fetchEvent(dto.eventId),
+      this.fetchTicketInfo(dto.eventId, dto.seatId),
+    ]);
     if (event.status !== 'PUBLISHED') {
       ordersCreatedTotal.inc({ result: 'forbidden' });
       throw new ForbiddenException('Событие ещё не опубликовано');
@@ -83,6 +93,9 @@ export class OrdersService {
           seatId: dto.seatId,
           userId: user.sub,
           amountCents: event.basePriceCents,
+          ticketSnapshot: ticketInfo
+            ? ({ buyerEmail: user.email, ...ticketInfo } satisfies TicketSnapshot)
+            : undefined,
         },
       });
     } catch (error) {
@@ -249,6 +262,33 @@ export class OrdersService {
     // только непустой ответ, а не res.json() напрямую.
     const text = await res.text();
     return text ? (JSON.parse(text) as MyHold) : null;
+  }
+
+  private async fetchTicketInfo(
+    eventId: string,
+    seatId: string,
+  ): Promise<CatalogTicketInfo | null> {
+    try {
+      const catalogUrl = this.config.getOrThrow<string>('CATALOG_SERVICE_URL');
+      const res = await fetch(
+        `${catalogUrl}/api/catalog/events/${eventId}/seats/${seatId}/ticket-info`,
+      );
+      if (!res.ok) {
+        this.logger.warn(
+          `данные билета недоступны (каталог ответил ${res.status}): заказ без снимка`,
+        );
+        return null;
+      }
+      const info = parseCatalogTicketInfo(await res.json());
+      if (!info) {
+        this.logger.warn('каталог вернул данные билета в неожиданной форме: заказ без снимка');
+      }
+      return info;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.logger.warn(`данные билета не получены (${message}): заказ без снимка`);
+      return null;
+    }
   }
 
   private async fetchEvent(eventId: string): Promise<CatalogEvent> {

@@ -5,6 +5,7 @@ import { REDIS_CLIENT } from '../cache/redis.module';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateEventDto } from './dto/create-event.dto';
 import { EventResponseDto } from './dto/event-response.dto';
+import { TicketInfoResponseDto } from './dto/ticket-info-response.dto';
 
 const PUBLISHED_LIST_CACHE_KEY = 'catalog:events:published';
 const CACHE_TTL_SECONDS = 60;
@@ -92,6 +93,47 @@ export class EventsService {
     });
     await this.redis.set(PUBLISHED_LIST_CACHE_KEY, JSON.stringify(events), 'EX', CACHE_TTL_SECONDS);
     return events;
+  }
+
+  /**
+   * Всё, что нужно для билета (событие, зал, место), одним запросом: payment
+   * снимает эти данные при создании заказа и кладёт их в событие order.paid,
+   * чтобы notification не ходил за ними по сети. Место ищется только среди
+   * мест зала этого события: чужое место с известным id даст 404.
+   * Не кэшируем: один вызов на заказ, два индексных запроса.
+   */
+  async findTicketInfo(eventId: string, seatId: string): Promise<TicketInfoResponseDto> {
+    const event = await this.prisma.event.findUnique({
+      where: { id: eventId },
+      select: {
+        title: true,
+        startsAt: true,
+        venueId: true,
+        venue: { select: { name: true, city: true, address: true } },
+      },
+    });
+    if (!event) {
+      throw new NotFoundException('Событие не найдено');
+    }
+
+    const seat = await this.prisma.seat.findFirst({
+      where: { id: seatId, venueId: event.venueId },
+      select: { section: true, row: true, number: true },
+    });
+    if (!seat) {
+      throw new NotFoundException('Место не найдено в зале этого события');
+    }
+
+    return {
+      eventTitle: event.title,
+      startsAt: event.startsAt.toISOString(),
+      venueName: event.venue.name,
+      venueCity: event.venue.city,
+      venueAddress: event.venue.address,
+      seatSection: seat.section,
+      seatRow: seat.row,
+      seatNumber: seat.number,
+    };
   }
 
   async findOne(id: string): Promise<EventResponseDto> {
