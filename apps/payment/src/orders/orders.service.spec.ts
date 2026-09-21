@@ -1,4 +1,4 @@
-import { ConflictException, ForbiddenException } from '@nestjs/common';
+import { ConflictException, ForbiddenException, Logger } from '@nestjs/common';
 import { AuthenticatedUser } from '../auth/jwt-auth.guard';
 import { Prisma } from '../generated/prisma';
 import { OutboxService } from '../outbox/outbox.service';
@@ -66,7 +66,28 @@ describe('OrdersService', () => {
 
     fetchMock = jest.fn();
     global.fetch = fetchMock as unknown as typeof fetch;
+    // Отсутствие снимка билета в тестах, где он не нужен, пишет предупреждение — не засоряем вывод.
+    jest.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
   });
+
+  const catalogTicketInfo = {
+    eventTitle: 'Концерт',
+    startsAt: '2026-12-20T19:00:00.000Z',
+    venueName: 'Дворец спорта',
+    venueCity: 'Минск',
+    venueAddress: 'пр. Победителей, 1',
+    seatSection: 'A',
+    seatRow: 3,
+    seatNumber: 12,
+  };
+
+  function mockTicketInfoResponse(body: unknown, status = 200): void {
+    fetchMock.mockResolvedValueOnce({
+      status,
+      ok: status < 400,
+      json: () => Promise.resolve(body),
+    });
+  }
 
   function mockHoldResponse(body: unknown, status = 200): void {
     fetchMock.mockResolvedValueOnce({
@@ -165,6 +186,66 @@ describe('OrdersService', () => {
         ConflictException,
       );
       expect(provider.createPaymentIntent).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('create: снимок данных билета', () => {
+    function arrangeHappyPath(): void {
+      mockHoldResponse({ seatId, expiresAt: '2026-01-01T00:05:00.000Z' });
+      mockEventResponse({ status: 'PUBLISHED', basePriceCents: 150000 });
+      prisma.order.create.mockResolvedValue({
+        id: 'order-1',
+        eventId,
+        seatId,
+        userId: user.sub,
+        amountCents: 150000,
+        status: 'PENDING',
+        providerIntentId: null,
+      });
+      provider.createPaymentIntent.mockResolvedValue({
+        providerIntentId: 'fake_pi_1',
+        clientSecret: 'fake_secret_1',
+      });
+      prisma.order.updateMany.mockResolvedValue({ count: 1 });
+      prisma.order.findUniqueOrThrow.mockResolvedValue({
+        id: 'order-1',
+        providerIntentId: 'fake_pi_1',
+      });
+    }
+
+    it('заказ сохраняет снимок: email покупателя из токена + событие, зал, место из каталога', async () => {
+      arrangeHappyPath();
+      mockTicketInfoResponse(catalogTicketInfo);
+
+      await service.create({ eventId, seatId }, user, authorization);
+
+      expect(prisma.order.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({
+          ticketSnapshot: { buyerEmail: user.email, ...catalogTicketInfo },
+        }),
+      });
+    });
+
+    it.each([
+      ['каталог ответил 404', () => mockTicketInfoResponse({ message: 'нет' }, 404)],
+      [
+        'каталог ответил в неожиданной форме',
+        () => mockTicketInfoResponse({ eventTitle: 'Концерт' }),
+      ],
+      [
+        'каталог недоступен (сетевая ошибка)',
+        () => fetchMock.mockRejectedValueOnce(new Error('ECONNREFUSED')),
+      ],
+    ])('%s — заказ всё равно создаётся, без снимка', async (_name, arrange) => {
+      arrangeHappyPath();
+      arrange();
+
+      const result = await service.create({ eventId, seatId }, user, authorization);
+
+      expect(result.order.providerIntentId).toBe('fake_pi_1');
+      expect(prisma.order.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({ ticketSnapshot: undefined }),
+      });
     });
   });
 

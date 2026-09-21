@@ -152,6 +152,61 @@ describe('CatalogController (интеграция, настоящий Nest + н�
     expect(publishedRes.body[0]).toMatchObject({ id: eventId, status: 'PUBLISHED' });
   });
 
+  it('GET /events/:id/seats/:seatId/ticket-info — событие, зал и место одним ответом; чужое место — 404', async () => {
+    const organizerToken = signToken('organizer-1', 'ORGANIZER');
+    const venueRes = await request(app.getHttpServer())
+      .post('/api/catalog/venues')
+      .set('Authorization', `Bearer ${organizerToken}`)
+      .send(createVenueDto)
+      .expect(201);
+    const venueId = venueRes.body.id as string;
+    await request(app.getHttpServer())
+      .post(`/api/catalog/venues/${venueId}/seats/generate`)
+      .set('Authorization', `Bearer ${organizerToken}`)
+      .send({ rows: 2, seatsPerRow: 3 })
+      .expect(201);
+    const seat = await prisma.seat.findFirstOrThrow({ where: { venueId, row: 2, number: 3 } });
+    const eventRes = await request(app.getHttpServer())
+      .post('/api/catalog/events')
+      .set('Authorization', `Bearer ${organizerToken}`)
+      .send({
+        venueId,
+        title: 'Концерт',
+        startsAt: '2026-12-20T19:00:00.000Z',
+        basePriceCents: 250000,
+      })
+      .expect(201);
+    const eventId = eventRes.body.id as string;
+
+    const res = await request(app.getHttpServer())
+      .get(`/api/catalog/events/${eventId}/seats/${seat.id}/ticket-info`)
+      .expect(200);
+    expect(res.body).toEqual({
+      eventTitle: 'Концерт',
+      startsAt: '2026-12-20T19:00:00.000Z',
+      venueName: 'Дворец спорта',
+      venueCity: 'Минск',
+      venueAddress: 'пр. Победителей, 1',
+      seatSection: null,
+      seatRow: 2,
+      seatNumber: 3,
+    });
+
+    // Место из ДРУГОГО зала с известным id нельзя выдать за место этого события.
+    const otherVenue = await prisma.venue.create({
+      data: { ...createVenueDto, name: 'Другой зал' },
+    });
+    const foreignSeat = await prisma.seat.create({
+      data: { venueId: otherVenue.id, row: 1, number: 1 },
+    });
+    await request(app.getHttpServer())
+      .get(`/api/catalog/events/${eventId}/seats/${foreignSeat.id}/ticket-info`)
+      .expect(404);
+    await request(app.getHttpServer())
+      .get(`/api/catalog/events/00000000-0000-4000-8000-000000000000/seats/${seat.id}/ticket-info`)
+      .expect(404);
+  });
+
   it('публикация чужого события организатором — 403 (не ADMIN и не свой организатор)', async () => {
     const ownerToken = signToken('organizer-owner', 'ORGANIZER');
     const otherToken = signToken('organizer-other', 'ORGANIZER');

@@ -10,7 +10,9 @@ export const RABBITMQ_CHANNEL = Symbol('RABBITMQ_CHANNEL');
 // — notification им не владеет, но обязан объявить с теми же
 // параметрами (assertExchange идемпотентен), иначе биндинг очереди
 // ниже упадёт, если notification стартует раньше payment хоть раз.
-export const PAYMENT_EVENTS_EXCHANGE = 'payment.events';
+// Имя переопределяется переменной окружения по той же причине, что и в payment:
+// изоляция параллельных интеграционных тестов на общем брокере.
+export const PAYMENT_EVENTS_EXCHANGE = process.env.PAYMENT_EVENTS_EXCHANGE ?? 'payment.events';
 
 // DLQ: сообщение, которое consumer не смог обработать (недоступен
 // auth/catalog/S3/SMTP), не должно теряться и не должно ретраиться

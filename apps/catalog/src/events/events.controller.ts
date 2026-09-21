@@ -7,6 +7,7 @@ import { Roles } from '../auth/roles.decorator';
 import { RolesGuard } from '../auth/roles.guard';
 import { CreateEventDto } from './dto/create-event.dto';
 import { EventResponseDto } from './dto/event-response.dto';
+import { TicketInfoResponseDto } from './dto/ticket-info-response.dto';
 import { EventsService } from './events.service';
 
 @ApiTags('events')
@@ -56,6 +57,19 @@ export class EventsController {
   @Get('mine')
   findMine(@CurrentUser() user: AuthenticatedUser): Promise<EventResponseDto[]> {
     return this.events.findMine(user.sub);
+  }
+
+  @ApiOperation({
+    summary: 'Данные билета: событие, зал и место одним запросом (для payment при создании заказа)',
+  })
+  @ApiResponse({ status: 200, type: TicketInfoResponseDto })
+  @ApiResponse({ status: 404, description: 'Событие или место в зале этого события не найдено' })
+  @Get(':id/seats/:seatId/ticket-info')
+  findTicketInfo(
+    @Param('id') id: string,
+    @Param('seatId') seatId: string,
+  ): Promise<TicketInfoResponseDto> {
+    return this.events.findTicketInfo(id, seatId);
   }
 
   @ApiOperation({ summary: 'Событие по id — публично, с кэшем' })
