@@ -209,7 +209,12 @@ services:
     # Порт наружу не публикуем — как и payment, у notification нет
     # публичного HTTP API, gateway его не проксирует.
 
-  gateway:
+  # Две одинаковые реплики gateway за Caddy (см. Caddyfile): пока одна перезапускается
+  # при деплое или упала, вторая принимает трафик. Пропускной способности вторая не
+  # добавляет (на сервере два ядра, и они и так заняты сервисами), её задача, чтобы
+  # деплой и падение одного процесса не были видны пользователям. Счётчики лимита
+  # частоты лежат в Redis и общие для реплик, кеш у каждой свой.
+  gateway: &gateway
     # image используется, когда CI когда-нибудь начнёт пушить готовые
     # образы в ghcr.io и мы перейдём на "docker compose pull". Сегодня,
     # на первом ручном деплое, реально работает build — собираем
@@ -247,6 +252,15 @@ services:
       JWT_ACCESS_SECRET: ${JWT_ACCESS_SECRET}
       JWT_REFRESH_SECRET: ${JWT_REFRESH_SECRET}
       OTEL_EXPORTER_OTLP_ENDPOINT: http://jaeger:4318
+      # Перед gateway стоит один прокси (Caddy): по нему определяется IP клиента для
+      # лимита частоты. Если поставить ещё один слой (CDN, балансировщик), число надо увеличить.
+      TRUST_PROXY_HOPS: 1
+      # Адреса без лимита частоты через запятую, например свой нагрузочный генератор.
+      # Пусто = лимит действует для всех. Задаётся в .env на сервере на время теста.
+      RATE_LIMIT_BYPASS_IPS: ${RATE_LIMIT_BYPASS_IPS:-}
+
+  gateway-2:
+    <<: *gateway
 
   caddy:
     image: caddy:2-alpine
@@ -267,8 +281,9 @@ services:
       - caddy_config:/config
     environment:
       CADDY_EMAIL: ${CADDY_EMAIL}
-    depends_on:
-      - gateway
+    # Без depends_on на gateway: реплики перезапускаются по одной отдельным шагом деплоя
+    # (см. .github/workflows/cd.yml), а Caddy сам проверяет их живость и не отправляет
+    # трафик туда, где никто не отвечает.
 
   jaeger:
     image: jaegertracing/all-in-one:latest
