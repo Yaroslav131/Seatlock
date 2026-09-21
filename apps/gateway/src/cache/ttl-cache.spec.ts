@@ -80,6 +80,14 @@ describe('TtlCache', () => {
     expect((await cache.get('k', 1000, retry)).value).toBe('ожил');
   });
 
+  it('delete забывает значение: следующий запрос идёт за свежим', async () => {
+    const loader = jest.fn(ok('a'));
+    await cache.get('k', 1000, loader);
+    cache.delete('k');
+    expect((await cache.get('k', 1000, loader)).source).toBe('miss');
+    expect(loader).toHaveBeenCalledTimes(2);
+  });
+
   it('не хранит больше maxEntries: вытесняет самые старые', async () => {
     for (const key of ['a', 'b', 'c', 'd']) {
       await cache.get(key, 10_000, ok(key));

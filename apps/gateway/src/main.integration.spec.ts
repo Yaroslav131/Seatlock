@@ -468,6 +468,20 @@ describe('gateway (интеграция: прокси, allowlist, таймаут
       expect(upstreamCalls('/ss-cache/my-hold')).toHaveLength(3);
     });
 
+    it('fresh=1 с токеном обходит кеш публичной части, без токена не обходит', async () => {
+      const call = (query: string, token?: string) => {
+        const req = request(app.getHttpServer()).get(`/api/events/ss-fresh/seat-status${query}`);
+        return (token ? req.set('Authorization', `Bearer ${token}`) : req).expect(200);
+      };
+      await call('', 'user-token');
+      await call('?fresh=1');
+      expect(upstreamCalls('/ss-fresh/holds')).toHaveLength(1);
+
+      await call('?fresh=1', 'user-token');
+      expect(upstreamCalls('/ss-fresh/holds')).toHaveLength(2);
+      expect(upstreamCalls('/ss-fresh/sold-seats')).toHaveLength(2);
+    });
+
     it('некорректный идентификатор события — 400, сервисы не тронуты', async () => {
       await request(app.getHttpServer()).get('/api/events/a%20b%3Fx/seat-status').expect(400);
       expect(upstreamRequests).toHaveLength(0);

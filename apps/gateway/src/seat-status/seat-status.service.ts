@@ -44,10 +44,19 @@ export class SeatStatusService {
 
   async get(
     eventId: string,
-    headers: { authorization?: string; requestId?: string },
+    headers: { authorization?: string; requestId?: string; fresh?: boolean },
   ): Promise<SeatStatus> {
     if (!EVENT_ID.test(eventId)) {
       throw new BadRequestException('Некорректный идентификатор события');
+    }
+
+    // fresh: пользователь только что сам занял или отпустил место и должен увидеть
+    // результат, а не секундную давность (иначе отпущенное им место до следующего
+    // опроса показывалось бы «занятым»). Только с токеном: анонимный запрос
+    // не может обойти кеш и создать лавину запросов к сервисам.
+    if (headers.fresh && headers.authorization) {
+      this.cache.delete(`held:${eventId}`);
+      this.cache.delete(`sold:${eventId}`);
     }
 
     const [held, sold, myHold] = await Promise.all([

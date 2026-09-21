@@ -1,10 +1,10 @@
 import type { JSX } from 'react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { getHeldSeats, getMyHold, Hold, holdSeat, releaseHold } from '../lib/booking-api';
+import { Hold, holdSeat, releaseHold } from '../lib/booking-api';
 import { ApiError } from '../lib/api-client';
 import { listVenueSeats, Seat } from '../lib/catalog-api';
-import { getSoldSeats } from '../lib/payment-api';
+import { getSeatStatus } from '../lib/seat-status-api';
 import { useCurrentUser } from '../lib/auth-store';
 import { Alert } from './ui/Alert';
 import { Button } from './ui/Button';
@@ -47,23 +47,26 @@ export function SeatMap({ eventId, venueId }: { eventId: string; venueId: string
   // а не самого свежего по времени ОТВЕТА.
   const refreshSeq = useRef(0);
 
-  const refreshHolds = useCallback(async () => {
-    const seq = ++refreshSeq.current;
-    try {
-      const [held, sold, mine] = await Promise.all([
-        getHeldSeats(eventId),
-        getSoldSeats(eventId),
-        userId ? getMyHold(eventId) : Promise.resolve(null),
-      ]);
-      if (seq !== refreshSeq.current) return;
-      setHeldSeatIds(new Set(held.map((h) => h.seatId)));
-      setSoldSeatIds(new Set(sold.map((s) => s.seatId)));
-      setMyHold(mine);
-    } catch {
-      // Поллинг молча пробует ещё раз через POLL_INTERVAL_MS — не хотим
-      // мигать баннером ошибки из-за одного пропущенного опроса.
-    }
-  }, [eventId, userId]);
+  // fresh — сразу после собственного действия: просим сервер не отдавать секундный кеш.
+  const refreshHolds = useCallback(
+    async (fresh = false) => {
+      const seq = ++refreshSeq.current;
+      try {
+        const { held, sold, myHold: mine } = await getSeatStatus(eventId, {
+          authenticated: userId !== null,
+          fresh,
+        });
+        if (seq !== refreshSeq.current) return;
+        setHeldSeatIds(new Set(held.map((h) => h.seatId)));
+        setSoldSeatIds(new Set(sold.map((s) => s.seatId)));
+        setMyHold(mine);
+      } catch {
+        // Поллинг молча пробует ещё раз через POLL_INTERVAL_MS — не хотим
+        // мигать баннером ошибки из-за одного пропущенного опроса.
+      }
+    },
+    [eventId, userId],
+  );
 
   useEffect(() => {
     listVenueSeats(venueId)
@@ -126,11 +129,11 @@ export function SeatMap({ eventId, venueId }: { eventId: string; venueId: string
         const hold = await holdSeat(eventId, seatId);
         setMyHold(hold);
       }
-      await refreshHolds();
+      await refreshHolds(true);
     } catch (err) {
       if (err instanceof ApiError && err.status === 409) {
         // Кто-то опередил между опросами — просто обновляем карту, без баннера ошибки.
-        await refreshHolds();
+        await refreshHolds(true);
       } else {
         const fallback = status === 'HELD_BY_YOU' ? 'Не удалось отпустить место' : 'Не удалось занять место';
         setError(err instanceof ApiError ? err.message : fallback);

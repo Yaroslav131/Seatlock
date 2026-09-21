@@ -4,23 +4,21 @@ import { ApiError } from '../lib/api-client';
 import type { DecodedAccessToken } from '../lib/auth-store';
 import { SeatMap } from './SeatMap';
 
-// Компонент дёргает эти модули напрямую (getHeldSeats/getMyHold/holdSeat/
+// Компонент дёргает эти модули напрямую (getSeatStatus/holdSeat/
 // releaseHold, listVenueSeats, useCurrentUser, useNavigate) — мокаем их,
 // а не сеть, чтобы тест не зависел от api-client/fetch и проверял только
 // логику самого SeatMap: какой статус места из каких ответов получается,
 // что происходит по клику, и главное — не откатывает ли устаревший ответ
 // уже свежее состояние (тот самый баг из прод-инцидента).
 vi.mock('../lib/booking-api', () => ({
-  getHeldSeats: vi.fn(),
-  getMyHold: vi.fn(),
   holdSeat: vi.fn(),
   releaseHold: vi.fn(),
 }));
 vi.mock('../lib/catalog-api', () => ({
   listVenueSeats: vi.fn(),
 }));
-vi.mock('../lib/payment-api', () => ({
-  getSoldSeats: vi.fn(),
+vi.mock('../lib/seat-status-api', () => ({
+  getSeatStatus: vi.fn(),
 }));
 vi.mock('../lib/auth-store', () => ({
   useCurrentUser: vi.fn(),
@@ -30,9 +28,9 @@ vi.mock('react-router-dom', () => ({
 }));
 
 import { useCurrentUser } from '../lib/auth-store';
-import { getHeldSeats, getMyHold, Hold, holdSeat, releaseHold } from '../lib/booking-api';
+import { Hold, holdSeat, releaseHold } from '../lib/booking-api';
 import { listVenueSeats, Seat } from '../lib/catalog-api';
-import { getSoldSeats } from '../lib/payment-api';
+import { getSeatStatus, type SeatStatusResponse } from '../lib/seat-status-api';
 import { useNavigate } from 'react-router-dom';
 
 const ORGANIZER_USER: DecodedAccessToken = {
@@ -43,6 +41,11 @@ const ORGANIZER_USER: DecodedAccessToken = {
 };
 
 const ONE_SEAT: Seat[] = [{ id: 'seat-1', section: null, row: 1, number: 1 }];
+
+/** Ответ агрегирующего эндпоинта: по умолчанию карта пуста, тесты переопределяют нужное. */
+function status(overrides: Partial<SeatStatusResponse> = {}): SeatStatusResponse {
+  return { held: [], sold: [], myHold: null, ...overrides };
+}
 
 /** Промис, который управляемо резолвится извне — нужен, чтобы задержать
  * один из двух конкурирующих ответов и проверить, кто из них выиграет. */
@@ -61,9 +64,7 @@ describe('SeatMap', () => {
     vi.mocked(useNavigate).mockReturnValue(navigateSpy);
     vi.mocked(useCurrentUser).mockReturnValue(ORGANIZER_USER);
     vi.mocked(listVenueSeats).mockResolvedValue(ONE_SEAT);
-    vi.mocked(getHeldSeats).mockResolvedValue([]);
-    vi.mocked(getSoldSeats).mockResolvedValue([]);
-    vi.mocked(getMyHold).mockResolvedValue(null);
+    vi.mocked(getSeatStatus).mockResolvedValue(status());
   });
 
   afterEach(() => {
@@ -78,8 +79,8 @@ describe('SeatMap', () => {
     expect(seat.className).toContain('bg-white');
   });
 
-  it('место из getHeldSeats (не моё) рендерится серым и задизейбленным', async () => {
-    vi.mocked(getHeldSeats).mockResolvedValue([{ seatId: 'seat-1' }]);
+  it('занятое место (не моё) рендерится серым и задизейбленным', async () => {
+    vi.mocked(getSeatStatus).mockResolvedValue(status({ held: [{ seatId: 'seat-1' }] }));
 
     render(<SeatMap eventId="event-1" venueId="venue-1" />);
 
@@ -88,11 +89,12 @@ describe('SeatMap', () => {
     expect(seat.className).toContain('bg-ink-200');
   });
 
-  it('своё место (getMyHold) рендерится выделенным и показывает баннер с отсчётом', async () => {
-    vi.mocked(getMyHold).mockResolvedValue({
-      seatId: 'seat-1',
-      expiresAt: new Date(Date.now() + 60_000).toISOString(),
-    });
+  it('своё место (myHold) рендерится выделенным и показывает баннер с отсчётом', async () => {
+    vi.mocked(getSeatStatus).mockResolvedValue(
+      status({
+        myHold: { seatId: 'seat-1', expiresAt: new Date(Date.now() + 60_000).toISOString() },
+      }),
+    );
 
     render(<SeatMap eventId="event-1" venueId="venue-1" />);
 
@@ -117,10 +119,9 @@ describe('SeatMap', () => {
   it('клик по свободному месту в системе занимает его и обновляет карту', async () => {
     const hold: Hold = { seatId: 'seat-1', expiresAt: new Date(Date.now() + 60_000).toISOString() };
     vi.mocked(holdSeat).mockResolvedValue(hold);
-    vi.mocked(getHeldSeats)
-      .mockResolvedValueOnce([])
-      .mockResolvedValue([{ seatId: 'seat-1' }]);
-    vi.mocked(getMyHold).mockResolvedValueOnce(null).mockResolvedValue(hold);
+    vi.mocked(getSeatStatus)
+      .mockResolvedValueOnce(status())
+      .mockResolvedValue(status({ held: [{ seatId: 'seat-1' }], myHold: hold }));
 
     render(<SeatMap eventId="event-1" venueId="venue-1" />);
 
@@ -132,10 +133,11 @@ describe('SeatMap', () => {
   });
 
   it('клик по "Перейти к оплате" ведёт на страницу оформления заказа с seatId в query', async () => {
-    vi.mocked(getMyHold).mockResolvedValue({
-      seatId: 'seat-1',
-      expiresAt: new Date(Date.now() + 60_000).toISOString(),
-    });
+    vi.mocked(getSeatStatus).mockResolvedValue(
+      status({
+        myHold: { seatId: 'seat-1', expiresAt: new Date(Date.now() + 60_000).toISOString() },
+      }),
+    );
 
     render(<SeatMap eventId="event-1" venueId="venue-1" />);
 
@@ -145,8 +147,8 @@ describe('SeatMap', () => {
     expect(navigateSpy).toHaveBeenCalledWith('/events/event-1/checkout?seatId=seat-1');
   });
 
-  it('проданное место (getSoldSeats) рендерится задизейбленным, клик по нему ничего не делает', async () => {
-    vi.mocked(getSoldSeats).mockResolvedValue([{ seatId: 'seat-1' }]);
+  it('проданное место (sold) рендерится задизейбленным, клик по нему ничего не делает', async () => {
+    vi.mocked(getSeatStatus).mockResolvedValue(status({ sold: [{ seatId: 'seat-1' }] }));
 
     render(<SeatMap eventId="event-1" venueId="venue-1" />);
 
@@ -159,11 +161,12 @@ describe('SeatMap', () => {
   });
 
   it('проданное место приоритетнее устаревшего холда (свой же холд на уже проданное место)', async () => {
-    vi.mocked(getSoldSeats).mockResolvedValue([{ seatId: 'seat-1' }]);
-    vi.mocked(getMyHold).mockResolvedValue({
-      seatId: 'seat-1',
-      expiresAt: new Date(Date.now() + 60_000).toISOString(),
-    });
+    vi.mocked(getSeatStatus).mockResolvedValue(
+      status({
+        sold: [{ seatId: 'seat-1' }],
+        myHold: { seatId: 'seat-1', expiresAt: new Date(Date.now() + 60_000).toISOString() },
+      }),
+    );
 
     render(<SeatMap eventId="event-1" venueId="venue-1" />);
 
@@ -173,10 +176,11 @@ describe('SeatMap', () => {
   });
 
   it('клик по своему месту отпускает его', async () => {
-    vi.mocked(getMyHold).mockResolvedValue({
-      seatId: 'seat-1',
-      expiresAt: new Date(Date.now() + 60_000).toISOString(),
-    });
+    vi.mocked(getSeatStatus).mockResolvedValue(
+      status({
+        myHold: { seatId: 'seat-1', expiresAt: new Date(Date.now() + 60_000).toISOString() },
+      }),
+    );
     vi.mocked(releaseHold).mockResolvedValue(undefined);
 
     render(<SeatMap eventId="event-1" venueId="venue-1" />);
@@ -195,8 +199,38 @@ describe('SeatMap', () => {
     const seat = await screen.findByTitle('Ряд 1, место 1');
     fireEvent.click(seat);
 
-    await waitFor(() => expect(getHeldSeats).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(getSeatStatus).toHaveBeenCalledTimes(2));
     expect(screen.queryByText('Место уже занято')).not.toBeInTheDocument();
+  });
+
+  it('обычный опрос идёт с кешем, а обновление после своего действия просит свежие данные', async () => {
+    vi.mocked(holdSeat).mockResolvedValue({
+      seatId: 'seat-1',
+      expiresAt: new Date(Date.now() + 60_000).toISOString(),
+    });
+
+    render(<SeatMap eventId="event-1" venueId="venue-1" />);
+    const seat = await screen.findByTitle('Ряд 1, место 1');
+    expect(getSeatStatus).toHaveBeenNthCalledWith(1, 'event-1', {
+      authenticated: true,
+      fresh: false,
+    });
+
+    fireEvent.click(seat);
+    await waitFor(() => expect(getSeatStatus).toHaveBeenCalledTimes(2));
+    expect(getSeatStatus).toHaveBeenNthCalledWith(2, 'event-1', {
+      authenticated: true,
+      fresh: true,
+    });
+  });
+
+  it('без логина запрос состояния идёт без токена', async () => {
+    vi.mocked(useCurrentUser).mockReturnValue(null);
+
+    render(<SeatMap eventId="event-1" venueId="venue-1" />);
+    await screen.findByTitle('Ряд 1, место 1');
+
+    expect(getSeatStatus).toHaveBeenCalledWith('event-1', { authenticated: false, fresh: false });
   });
 
   it(
@@ -204,21 +238,19 @@ describe('SeatMap', () => {
       'откатывать уже применённое свежее состояние — тот самый прод-баг ' +
       '("отпустил место — оно снова показывалось занятым")',
     async () => {
-      const staleHeld = deferred<{ seatId: string }[]>();
-      const staleMine = deferred<Hold | null>();
+      const stale = deferred<SeatStatusResponse>();
 
       // Первый вызов (при монтировании) зависает — резолвим его позже,
       // намеренно устаревшими данными. Второй вызов (после клика) отвечает
       // сразу актуальным состоянием.
-      vi.mocked(getHeldSeats)
-        .mockReturnValueOnce(staleHeld.promise)
-        .mockResolvedValueOnce([{ seatId: 'seat-1' }]);
-      vi.mocked(getMyHold)
-        .mockReturnValueOnce(staleMine.promise)
-        .mockResolvedValueOnce({
-          seatId: 'seat-1',
-          expiresAt: new Date(Date.now() + 60_000).toISOString(),
-        });
+      vi.mocked(getSeatStatus)
+        .mockReturnValueOnce(stale.promise)
+        .mockResolvedValueOnce(
+          status({
+            held: [{ seatId: 'seat-1' }],
+            myHold: { seatId: 'seat-1', expiresAt: new Date(Date.now() + 60_000).toISOString() },
+          }),
+        );
       vi.mocked(holdSeat).mockResolvedValue({
         seatId: 'seat-1',
         expiresAt: new Date(Date.now() + 60_000).toISOString(),
@@ -235,8 +267,7 @@ describe('SeatMap', () => {
       // Теперь наконец резолвится первый, устаревший опрос — с данными,
       // будто место вообще ничьё. Без guard'а по refreshSeq это откатило
       // бы карту обратно на "свободно".
-      staleHeld.resolve([]);
-      staleMine.resolve(null);
+      stale.resolve(status());
 
       // Даём микрозадачам устаканиться и убеждаемся, что состояние НЕ откатилось.
       await new Promise((r) => setTimeout(r, 0));

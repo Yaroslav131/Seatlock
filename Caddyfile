@@ -10,7 +10,35 @@ seatlock.fun, www.seatlock.fun {
 	# долетит до gateway ровно так же, целиком.
 	@backend path /api/* /health /health/ready
 	handle @backend {
-		reverse_proxy gateway:3000
+		# Две реплики gateway. least_conn отправляет запрос той, у которой меньше
+		# активных соединений. Проверено вручную на заглушках: остановка одной реплики
+		# под потоком запросов не даёт ни одной ошибки.
+		# - dial_timeout: к остановленной реплике пакеты уходят в пустоту, и без короткого
+		#   таймаута Caddy ждал бы на ней весь lb_try_duration (3 с) и отвечал 502.
+		# - max_fails 1 и fail_duration: реплика с первой же ошибкой на 10 секунд выпадает
+		#   из ротации, не дожидаясь активной проверки.
+		# - health_uri: активная проверка раз в 5 секунд возвращает реплику в ротацию.
+		#   /health, а не /health/ready: обе реплики зависят от одних и тех же Postgres и
+		#   Redis, и сбой зависимости не должен выбивать из ротации обе сразу.
+		# - повтор на другой реплике: если соединение установить не удалось, повторяется
+		#   любой запрос (он не дошёл до реплики), а если оборвалось посреди запроса,
+		#   только GET и HEAD. Заказ или возврат из-за повтора не выполнится дважды.
+		reverse_proxy gateway:3000 gateway-2:3000 {
+			lb_policy least_conn
+			lb_try_duration 3s
+			lb_try_interval 250ms
+			lb_retry_match {
+				method GET HEAD
+			}
+			health_uri /health
+			health_interval 5s
+			health_timeout 2s
+			fail_duration 10s
+			max_fails 1
+			transport http {
+				dial_timeout 1s
+			}
+		}
 	}
 
 	# Всё остальное — статика React. try_files с фолбэком на index.html

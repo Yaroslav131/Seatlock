@@ -84,6 +84,11 @@ export class TtlCache<T> {
     }
   }
 
+  /** Забыть значение: следующий get() сходит за свежим. Идущий запрос не прерывается. */
+  delete(key: string): void {
+    this.entries.delete(key);
+  }
+
   get size(): number {
     return this.entries.size;
   }

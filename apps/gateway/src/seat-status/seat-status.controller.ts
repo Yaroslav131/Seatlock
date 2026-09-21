@@ -1,5 +1,5 @@
-import { Controller, Get, Param, Req } from '@nestjs/common';
-import { ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
+import { Controller, Get, Param, Query, Req } from '@nestjs/common';
+import { ApiOperation, ApiQuery, ApiResponse, ApiTags } from '@nestjs/swagger';
 import type { Request } from 'express';
 import { SeatStatus, SeatStatusService } from './seat-status.service';
 
@@ -13,12 +13,22 @@ export class SeatStatusController {
       'Состояние карты мест одним запросом: занятые, проданные и (с токеном) свой холд. ' +
       'Заменяет три отдельных запроса, которые карта делала при каждом опросе.',
   })
+  @ApiQuery({
+    name: 'fresh',
+    required: false,
+    description: 'Обойти секундный кеш (учитывается только с токеном): после своего действия',
+  })
   @ApiResponse({ status: 200, description: '{ held: [{seatId}], sold: [{seatId}], myHold }' })
   @Get()
-  get(@Param('eventId') eventId: string, @Req() req: Request): Promise<SeatStatus> {
+  get(
+    @Param('eventId') eventId: string,
+    @Query('fresh') fresh: string | undefined,
+    @Req() req: Request,
+  ): Promise<SeatStatus> {
     return this.seatStatus.get(eventId, {
       authorization: req.headers.authorization,
       requestId: req.headers['x-request-id'] as string | undefined,
+      fresh: fresh === '1' || fresh === 'true',
     });
   }
 }

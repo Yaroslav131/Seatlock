@@ -23,6 +23,10 @@ describe('таблица публичных маршрутов', () => {
     ['GET', '/api/payment/events/e1/sold-seats'],
     ['POST', '/api/payment/webhooks/provider'],
     ['POST', '/api/payment/dev/fake-webhook'],
+    ['GET', '/api/auth/docs'],
+    ['GET', '/api/catalog/docs-json'],
+    ['GET', '/api/booking/docs/swagger-ui-bundle.js'],
+    ['GET', '/api/payment/docs'],
   ])('%s %s — разрешён', (method, path) => {
     expect(matchRoute(method, path)).not.toBeNull();
   });
@@ -39,6 +43,8 @@ describe('таблица публичных маршрутов', () => {
     ['GET', '/api/internal/users/u1'],
     ['GET', '/api/payment/metrics'],
     ['GET', '/api/booking'],
+    ['GET', '/api/catalog/docs/a/b'],
+    ['POST', '/api/catalog/docs'],
   ])('%s %s — не разрешён', (method, path) => {
     expect(matchRoute(method, path)).toBeNull();
   });

@@ -32,7 +32,7 @@ const CACHE_TTL_MS = 5_000;
  * Порядок важен: берётся первый подошедший маршрут, поэтому частные пути
  * (`/events/mine`) стоят раньше общих (`/events/:id`).
  */
-export const PUBLIC_ROUTES: readonly PublicRoute[] = [
+const API_ROUTES: readonly PublicRoute[] = [
   // auth
   {
     upstream: 'auth',
@@ -149,6 +149,19 @@ export const PUBLIC_ROUTES: readonly PublicRoute[] = [
     noTimeout: true,
   },
 ];
+
+// Swagger каждого сервиса (/api/<сервис>/docs, docs-json и статика страницы) публичен
+// намеренно: это заявленная возможность (см. README), и вся документация API живёт там.
+const DOCS_ROUTES: readonly PublicRoute[] = (
+  ['auth', 'catalog', 'booking', 'payment'] as const
+).map((upstream) => ({
+  upstream,
+  method: 'GET',
+  path: new RegExp(`^/api/${upstream}/docs(-json|-yaml)?(/[^/]+)?$`),
+  rateLimit: 'default',
+}));
+
+export const PUBLIC_ROUTES: readonly PublicRoute[] = [...API_ROUTES, ...DOCS_ROUTES];
 
 // Префиксы, за которыми стоят сервисы: запрос под таким префиксом обязан
 // совпасть с PUBLIC_ROUTES, иначе 404. Остальные пути /api/* (/api/me, /api/docs,
