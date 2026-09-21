@@ -159,6 +159,15 @@ jobs:
             # up сам создаст контейнеры по новому описанию.
             docker compose -f docker-compose.prod.yml up -d rabbitmq minio auth catalog booking payment notification caddy jaeger prometheus grafana
 
+            # Caddyfile смонтирован в контейнер одним файлом, а git при checkout
+            # пересоздаёт файл (новый inode): контейнер продолжает видеть старую версию,
+            # и изменение конфигурации (например, список реплик gateway) без этого не
+            # применилось бы. Сравниваем то, что видит контейнер, с файлом на диске.
+            if ! docker exec -i seatlock-caddy-1 cmp -s /etc/caddy/Caddyfile - < Caddyfile; then
+              echo "Caddyfile изменился, пересоздаю caddy"
+              docker compose -f docker-compose.prod.yml up -d --force-recreate --no-deps caddy
+            fi
+
             # gateway обновляем по одной реплике: пока перезапускается первая, Caddy
             # держит трафик на второй. --no-deps, чтобы compose не тронул обе разом
             # через зависимости. Между репликами ждём, пока новая станет healthy и
