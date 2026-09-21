@@ -2,6 +2,7 @@ import { Global, Logger, Module, OnApplicationShutdown } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { ModuleRef } from '@nestjs/core';
 import * as amqp from 'amqplib';
+import { readPrefetch } from './prefetch';
 
 export const RABBITMQ_CONNECTION = Symbol('RABBITMQ_CONNECTION');
 export const RABBITMQ_CHANNEL = Symbol('RABBITMQ_CHANNEL');
@@ -36,8 +37,11 @@ export const ORDER_PAID_ROUTING_KEY = 'order.paid';
     },
     {
       provide: RABBITMQ_CHANNEL,
-      inject: [RABBITMQ_CONNECTION],
-      useFactory: async (connection: amqp.ChannelModel): Promise<amqp.Channel> => {
+      inject: [RABBITMQ_CONNECTION, ConfigService],
+      useFactory: async (
+        connection: amqp.ChannelModel,
+        config: ConfigService,
+      ): Promise<amqp.Channel> => {
         // Обычный канал, не confirm — в отличие от payment, notification
         // только потребляет, ничего не публикует, publisher confirms
         // тут не нужны.
@@ -54,11 +58,12 @@ export const ORDER_PAID_ROUTING_KEY = 'order.paid';
         });
         await channel.bindQueue(ORDER_PAID_QUEUE, PAYMENT_EVENTS_EXCHANGE, ORDER_PAID_ROUTING_KEY);
 
-        // Не хватать пачку сообщений разом, пока предыдущее не
-        // подтверждено — при падении процесса до ack непринятые
-        // сообщения просто вернутся в очередь для другого воркера,
-        // а не потеряются пачкой.
-        await channel.prefetch(1);
+        // Сколько неподтверждённых сообщений держим в работе (по умолчанию 1).
+        // Больше 1 — обработка нескольких писем одновременно, пока одно ждёт SMTP
+        // или S3. При падении процесса до ack неподтверждённые сообщения
+        // вернутся в очередь, а не потеряются. Потолок задаёт лимит почтового
+        // релея (Resend: 10 запросов/с на команду), см. ADR 0006.
+        await channel.prefetch(readPrefetch(config));
 
         return channel;
       },

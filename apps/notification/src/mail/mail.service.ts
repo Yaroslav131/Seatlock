@@ -1,7 +1,8 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, OnModuleDestroy } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import * as nodemailer from 'nodemailer';
 import { ticketMailSuppressedTotal } from '../metrics/business-metrics';
+import { readPrefetch } from '../rabbitmq/prefetch';
 
 // .invalid зарезервирован RFC 2606 и никогда не резолвится — реальный человек
 // с таким адресом существовать не может. Нагрузочный тест (packages/load-test)
@@ -17,7 +18,7 @@ export interface TicketEmail {
 }
 
 @Injectable()
-export class MailService {
+export class MailService implements OnModuleDestroy {
   private readonly transport: nodemailer.Transporter;
 
   constructor(private readonly config: ConfigService) {
@@ -30,10 +31,21 @@ export class MailService {
       host: this.config.getOrThrow<string>('SMTP_HOST'),
       port: this.config.get<number>('SMTP_PORT', 1025),
       secure: this.config.get<string>('SMTP_SECURE', 'false') === 'true',
+      // Пул переиспользует SMTP-соединения. Без него каждое письмо открывает новое
+      // (TCP, TLS, AUTH): на замере против Mailpit это 8 с на письмо против 5-9 мс
+      // по готовому соединению, а с реальным релеем — сотни миллисекунд на письмо.
+      // Соединений не больше, чем писем в работе одновременно.
+      pool: true,
+      maxConnections: readPrefetch(this.config),
       auth: smtpUser
         ? { user: smtpUser, pass: this.config.getOrThrow<string>('SMTP_PASSWORD') }
         : undefined,
     });
+  }
+
+  onModuleDestroy(): void {
+    // Пул держит открытые сокеты — закрываем, иначе процесс не завершится чисто.
+    this.transport.close();
   }
 
   async sendTicket(email: TicketEmail): Promise<void> {

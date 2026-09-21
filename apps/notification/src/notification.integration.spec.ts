@@ -7,6 +7,7 @@ import type { AddressInfo } from 'node:net';
 import request from 'supertest';
 import { AppModule } from './app.module';
 import { replayDeadLetters } from './dlq/replay-dead-letters';
+import { MailService } from './mail/mail.service';
 import { OrderPaidConsumer } from './notifications/order-paid.consumer';
 import { TicketStorageService } from './tickets/ticket-storage.service';
 import { PrismaService } from './prisma/prisma.service';
@@ -24,6 +25,8 @@ import {
 process.env.NOTIFICATION_DATABASE_URL ??=
   'postgresql://seatlock:seatlock@localhost:5433/seatlock?schema=notification';
 process.env.RABBITMQ_URL ??= 'amqp://seatlock:seatlock@localhost:5673';
+// Несколько писем в работе одновременно: заодно все тесты файла идут при prefetch > 1.
+process.env.NOTIFICATION_PREFETCH ??= '3';
 process.env.S3_ENDPOINT ??= 'http://localhost:9100';
 process.env.S3_ACCESS_KEY ??= 'seatlock';
 process.env.S3_SECRET_KEY ??= 'seatlock123';
@@ -305,6 +308,83 @@ describe('notification (интеграция, настоящий Nest + Postgres
       (url) => url.includes(snapshotEventId) || url.includes(snapshotUserId),
     );
     expect(ownRequests).toEqual([]);
+  });
+
+  it('prefetch > 1: несколько заказов обрабатываются одновременно, письмо на каждый ровно одно', async () => {
+    const mail = app.get(MailService);
+    const originalSend = mail.sendTicket.bind(mail);
+    let inFlight = 0;
+    let maxInFlight = 0;
+    const sendSpy = jest.spyOn(mail, 'sendTicket').mockImplementation(async (email) => {
+      inFlight += 1;
+      maxInFlight = Math.max(maxInFlight, inFlight);
+      try {
+        return await originalSend(email);
+      } finally {
+        inFlight -= 1;
+      }
+    });
+
+    const runId = Date.now();
+    const orders = Array.from({ length: 3 }, (_, i) => ({
+      orderId: `order-prefetch-${runId}-${i}`,
+      email: `prefetch-${runId}-${i}@seatlock.fun`,
+    }));
+    const connection = await amqp.connect(process.env.RABBITMQ_URL!);
+    const channel = await connection.createChannel();
+    for (const { orderId, email } of orders) {
+      channel.publish(
+        PAYMENT_EVENTS_EXCHANGE,
+        'order.paid',
+        Buffer.from(
+          JSON.stringify({
+            orderId,
+            userId,
+            eventId: 'event-1',
+            seatId: 'seat-1',
+            amountCents: 150000,
+            ticket: {
+              buyerEmail: email,
+              eventTitle: 'Параллельная обработка',
+              startsAt: '2026-12-01T19:00:00.000Z',
+              venueName: 'Дворец спорта',
+              venueCity: 'Минск',
+              venueAddress: 'пр. Победителей, 1',
+              seatSection: null,
+              seatRow: 1,
+              seatNumber: 1,
+            },
+          }),
+        ),
+        { persistent: true, contentType: 'application/json' },
+      );
+    }
+    await channel.close();
+    await connection.close();
+
+    try {
+      for (const { orderId } of orders) {
+        const log = await waitFor(async () => {
+          const row = await prisma.notificationLog.findUnique({
+            where: { orderId_type: { orderId, type: 'TICKET_EMAIL' } },
+          });
+          return row && row.status !== 'PROCESSING' ? row : null;
+        }, 25_000);
+        expect(log.status).toBe('SENT');
+      }
+    } finally {
+      sendSpy.mockRestore();
+    }
+
+    // Отправки перекрывались во времени — иначе prefetch не даёт выигрыша.
+    expect(maxInFlight).toBeGreaterThan(1);
+    const mailpit = (await (await fetch(`${MAILPIT_API}/messages`)).json()) as {
+      messages: Array<{ To: Array<{ Address: string }> }>;
+    };
+    for (const { email } of orders) {
+      const delivered = mailpit.messages.filter((m) => m.To.some((to) => to.Address === email));
+      expect(delivered).toHaveLength(1);
+    }
   });
 
   it('два воркера одновременно берут один и тот же заказ: письмо одно (атомарный захват)', async () => {
