@@ -10,98 +10,22 @@ import { Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { NestFactory } from '@nestjs/core';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
-import { json, urlencoded } from 'express';
-import { createProxyMiddleware } from 'http-proxy-middleware';
+import type { NestExpressApplication } from '@nestjs/platform-express';
 import { AppModule } from './app.module';
-import { metricsMiddleware } from './metrics/metrics';
+import { configureApp } from './setup';
 
 async function bootstrap(): Promise<void> {
   // Отключаем автоматический body-parser Nest: если он разберёт тело
   // запроса первым, до прокси, поток будет уже вычитан и /auth/login
   // с пустым телом улетит на auth-сервис. Прокси должен получить
   // сырые байты нетронутыми.
-  const app = await NestFactory.create(AppModule, { bodyParser: false });
+  const app = await NestFactory.create<NestExpressApplication>(AppModule, { bodyParser: false });
   const config = app.get(ConfigService);
 
-  // enableCors должен идти раньше прокси — иначе CORS-заголовки
-  // не долетят до ответов, которые прокси отдаёт напрямую, в обход
-  // остального пайплайна Nest.
-  app.enableCors({
-    origin: config.get<string>('CORS_ORIGIN', 'http://localhost:5173'),
-    credentials: true,
-  });
+  configureApp(app, config);
 
-  // Раньше всех прокси-блоков ниже — иначе не увидел бы большую часть
-  // трафика вообще (см. комментарий в metrics/metrics.ts).
-  app.use(metricsMiddleware);
-
-  // Единственная публичная точка входа для авторизации: снаружи виден
-  // только gateway, а какой сервис реально отвечает — деталь реализации.
-  // Пути совпадают один в один (у auth тоже префикс /api), переписывать
-  // ничего не нужно.
-  //
-  // pathFilter, а не app.use('/api/auth', ...): при монтировании по пути
-  // Express сам вырезает этот префикс из req.url до того, как его увидит
-  // прокси, и /api/auth/register долетел бы до auth как голый /register.
-  // pathFilter проверяет путь сам, не трогая req.url.
-  const authServiceUrl = config.get<string>('AUTH_SERVICE_URL', 'http://localhost:3001');
-  app.use(
-    createProxyMiddleware({
-      target: authServiceUrl,
-      changeOrigin: true,
-      pathFilter: '/api/auth',
-    }),
-  );
-
-  // Тот же приём для catalog: события/залы публичные для чтения,
-  // а запись сам catalog защищает своим JwtAuthGuard + RolesGuard —
-  // gateway тут снова просто труба, не разбирается в содержимом.
-  const catalogServiceUrl = config.get<string>('CATALOG_SERVICE_URL', 'http://localhost:3002');
-  app.use(
-    createProxyMiddleware({
-      target: catalogServiceUrl,
-      changeOrigin: true,
-      pathFilter: '/api/catalog',
-    }),
-  );
-
-  // booking хранит холды мест только в Redis (см. docs/adr/0003) —
-  // gateway про это не знает и знать не должен, для него это такой же
-  // проксируемый сервис, как и остальные два.
-  const bookingServiceUrl = config.get<string>('BOOKING_SERVICE_URL', 'http://localhost:3003');
-  app.use(
-    createProxyMiddleware({
-      target: bookingServiceUrl,
-      changeOrigin: true,
-      pathFilter: '/api/booking',
-    }),
-  );
-
-  // payment принимает вебхук от платёжного провайдера и сам проверяет
-  // подпись по сырым байтам тела (см. apps/payment/src/main.ts) —
-  // bodyParser:false у gateway здесь как раз кстати: байты долетают
-  // до payment нетронутыми без какой-либо доп. настройки прокси.
-  const paymentServiceUrl = config.get<string>('PAYMENT_SERVICE_URL', 'http://localhost:3004');
-  app.use(
-    createProxyMiddleware({
-      target: paymentServiceUrl,
-      changeOrigin: true,
-      pathFilter: '/api/payment',
-    }),
-  );
-
-  // Парсер тела нужен только тем маршрутам, что реально обрабатывает
-  // сам gateway — до прокси-путей он не достаёт, т.к. тот уже
-  // ответил и не вызывает next().
-  app.use(json());
-  app.use(urlencoded({ extended: true }));
-
-  // Health-эндпоинты выносим за префикс /api, чтобы балансировщик
-  // в AWS мог опрашивать их напрямую по короткому пути.
-  app.setGlobalPrefix('api', { exclude: ['health', 'health/ready', 'metrics'] });
-
-  // /api/docs, а не /api/auth/... — сюда pathFilter прокси не достаёт,
-  // маршрут остаётся на самом gateway, а не улетает на auth.
+  // /api/docs обслуживает сам gateway: пути вне /api/<сервис> прокси не трогает,
+  // и запрос не улетает ни в один сервис.
   const swaggerDoc = SwaggerModule.createDocument(
     app,
     new DocumentBuilder().setTitle('SeatLock — gateway').setVersion('1.0').addBearerAuth().build(),

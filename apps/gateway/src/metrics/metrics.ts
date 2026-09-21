@@ -25,6 +25,7 @@ const KNOWN_PREFIXES = [
   '/api/catalog',
   '/api/booking',
   '/api/payment',
+  '/api/events',
   '/api/me',
   '/health',
 ];
@@ -50,3 +51,33 @@ export function metricsMiddleware(req: Request, res: Response, next: NextFunctio
 
   next();
 }
+
+// Бизнес-метрики самого gateway: что он отсёк, ограничил или отдал из кеша.
+// Без них не понять, во что упёрся трафик, не заглядывая в логи.
+export const gatewayBlockedTotal = new Counter({
+  name: 'gateway_route_blocked_total',
+  help: 'Запросы к путям, которых нет в списке публичных маршрутов (ответ 404 без похода в сервис)',
+});
+
+export const gatewayRateLimitedTotal = new Counter({
+  name: 'gateway_rate_limited_total',
+  help: 'Запросы, отклонённые лимитом частоты (ответ 429)',
+  labelNames: ['policy'],
+});
+
+export const gatewayRateLimitErrorsTotal = new Counter({
+  name: 'gateway_rate_limit_errors_total',
+  help: 'Сбои проверки лимита (Redis недоступен или медлит); запрос при этом пропускается',
+});
+
+export const gatewayCacheTotal = new Counter({
+  name: 'gateway_cache_total',
+  help: 'Ответы кеша gateway: hit — из кеша, coalesced — присоединился к идущему запросу, miss — сходили в сервис',
+  labelNames: ['result'],
+});
+
+export const gatewayUpstreamErrorsTotal = new Counter({
+  name: 'gateway_upstream_errors_total',
+  help: 'Ошибки при обращении к сервису: timeout — не ответил вовремя, unreachable — недоступен',
+  labelNames: ['service', 'kind'],
+});
