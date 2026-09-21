@@ -172,9 +172,13 @@ describe('payment (интеграция, настоящий Nest + настоя�
     const rabbitChannel = await rabbitConnection.createChannel();
     const { queue } = await rabbitChannel.assertQueue('', { exclusive: true });
     await rabbitChannel.bindQueue(queue, PAYMENT_EVENTS_EXCHANGE, 'order.paid');
+    // Тесты других пакетов идут параллельно на том же RabbitMQ и публикуют свои
+    // order.paid — берём только событие своего заказа.
     const delivery = new Promise<amqp.ConsumeMessage>((resolve) => {
       void rabbitChannel.consume(queue, (msg) => {
-        if (msg) resolve(msg);
+        if (!msg) return;
+        const body = JSON.parse(msg.content.toString('utf-8')) as { orderId?: string };
+        if (body.orderId === orderId) resolve(msg);
       });
     });
 
@@ -274,6 +278,92 @@ describe('payment (интеграция, настоящий Nest + настоя�
 
     const reloaded = await prisma.outboxEvent.findUniqueOrThrow({ where: { id: event.id } });
     expect(reloaded.publishedAt).toBeNull();
+  });
+
+  it('повторный POST /orders того же пользователя на то же место — тот же заказ (идемпотентность), новый не создаётся', async () => {
+    const token = signToken('user-1');
+    const send = () =>
+      request(app.getHttpServer())
+        .post('/api/payment/orders')
+        .set('Authorization', `Bearer ${token}`)
+        .send({ eventId, seatId })
+        .expect(201);
+
+    const first = await send();
+    const second = await send();
+
+    expect(second.body.id).toBe(first.body.id);
+    expect(second.body.providerIntentId).toBe(first.body.providerIntentId);
+    expect(second.body.clientSecret).toBe(first.body.clientSecret);
+    expect(await prisma.order.count()).toBe(1);
+  });
+
+  it('повтор после оплаты (booking уже погасил холд) возвращает оплаченный заказ, а не 403', async () => {
+    const token = signToken('user-1');
+    const created = await request(app.getHttpServer())
+      .post('/api/payment/orders')
+      .set('Authorization', `Bearer ${token}`)
+      .send({ eventId, seatId })
+      .expect(201);
+    await request(app.getHttpServer())
+      .post('/api/payment/dev/fake-webhook')
+      .send({ providerIntentId: created.body.providerIntentId, type: 'payment.succeeded' })
+      .expect(200);
+    upstreamState.hold = null;
+
+    const again = await request(app.getHttpServer())
+      .post('/api/payment/orders')
+      .set('Authorization', `Bearer ${token}`)
+      .send({ eventId, seatId })
+      .expect(201);
+
+    expect(again.body.id).toBe(created.body.id);
+    expect(again.body.status).toBe('PAID');
+  });
+
+  it('двойной клик (два одновременных запроса): один заказ, оба ответа с одним и тем же intent', async () => {
+    const token = signToken('user-1');
+    const send = () =>
+      request(app.getHttpServer())
+        .post('/api/payment/orders')
+        .set('Authorization', `Bearer ${token}`)
+        .send({ eventId, seatId });
+
+    const [a, b] = await Promise.all([send(), send()]);
+
+    expect([a.status, b.status]).toEqual([201, 201]);
+    expect(a.body.id).toBe(b.body.id);
+    expect(a.body.providerIntentId).toBe(b.body.providerIntentId);
+    const stored = await prisma.order.findUniqueOrThrow({ where: { id: a.body.id } });
+    expect(stored.providerIntentId).toBe(a.body.providerIntentId);
+    expect(await prisma.order.count()).toBe(1);
+  });
+
+  it('несколько паблишеров одновременно не публикуют одно и то же событие дважды (FOR UPDATE SKIP LOCKED)', async () => {
+    const eventType = 'concurrency.test';
+    const total = 30;
+    await prisma.outboxEvent.createMany({
+      data: Array.from({ length: total }, (_, i) => ({ eventType, payload: { n: i } })),
+    });
+
+    const rabbitConnection = await amqp.connect(process.env.RABBITMQ_URL!);
+    const rabbitChannel = await rabbitConnection.createChannel();
+    const { queue } = await rabbitChannel.assertQueue('', { exclusive: true });
+    await rabbitChannel.bindQueue(queue, PAYMENT_EVENTS_EXCHANGE, eventType);
+
+    const publisher = app.get(OutboxPublisherService);
+    await Promise.all([
+      publisher.publishPending(),
+      publisher.publishPending(),
+      publisher.publishPending(),
+    ]);
+
+    const { messageCount } = await rabbitChannel.checkQueue(queue);
+    await rabbitChannel.close();
+    await rabbitConnection.close();
+
+    expect(messageCount).toBe(total);
+    expect(await prisma.outboxEvent.count({ where: { publishedAt: null } })).toBe(0);
   });
 
   it('GET /metrics — отдаёт метрики в формате Prometheus', async () => {

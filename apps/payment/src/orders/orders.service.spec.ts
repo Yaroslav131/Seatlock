@@ -11,7 +11,10 @@ function createPrismaMock() {
     order: {
       create: jest.fn(),
       update: jest.fn(),
+      updateMany: jest.fn(),
+      findUniqueOrThrow: jest.fn(),
       findUnique: jest.fn(),
+      findFirst: jest.fn(),
       findMany: jest.fn(),
     },
   };
@@ -24,6 +27,7 @@ function createConfigMock(values: Record<string, string>) {
 function createProviderMock(): jest.Mocked<PaymentProviderPort> {
   return {
     createPaymentIntent: jest.fn(),
+    getClientSecret: jest.fn(),
     verifyWebhookSignature: jest.fn(),
     refund: jest.fn(),
   };
@@ -46,6 +50,7 @@ describe('OrdersService', () => {
 
   beforeEach(() => {
     prisma = createPrismaMock();
+    prisma.order.findFirst.mockResolvedValue(null); // по умолчанию активного заказа на место нет
     config = createConfigMock({
       BOOKING_SERVICE_URL: 'http://booking.local',
       CATALOG_SERVICE_URL: 'http://catalog.local',
@@ -96,7 +101,8 @@ describe('OrdersService', () => {
         providerIntentId: 'fake_pi_1',
         clientSecret: 'fake_secret_1',
       });
-      prisma.order.update.mockResolvedValue({
+      prisma.order.updateMany.mockResolvedValue({ count: 1 });
+      prisma.order.findUniqueOrThrow.mockResolvedValue({
         id: 'order-1',
         eventId,
         seatId,
@@ -159,6 +165,124 @@ describe('OrdersService', () => {
         ConflictException,
       );
       expect(provider.createPaymentIntent).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('create: идемпотентность', () => {
+    const activeOrder = {
+      id: 'order-1',
+      eventId,
+      seatId,
+      userId: user.sub,
+      amountCents: 150000,
+      status: 'PENDING',
+      providerIntentId: 'fake_pi_1',
+    };
+
+    it('повтор того же пользователя на то же место — тот же заказ, без походов в booking/catalog и без нового заказа', async () => {
+      prisma.order.findFirst.mockResolvedValue(activeOrder);
+      provider.getClientSecret.mockResolvedValue('fake_secret_fake_pi_1');
+
+      const result = await service.create({ eventId, seatId }, user, authorization);
+
+      expect(result.order).toBe(activeOrder);
+      expect(result.clientSecret).toBe('fake_secret_fake_pi_1');
+      expect(provider.getClientSecret).toHaveBeenCalledWith('fake_pi_1');
+      expect(fetchMock).not.toHaveBeenCalled();
+      expect(prisma.order.create).not.toHaveBeenCalled();
+      expect(provider.createPaymentIntent).not.toHaveBeenCalled();
+    });
+
+    it('повтор после того, как заказ уже оплачен (холд погашен) — возвращает его, а не 403', async () => {
+      prisma.order.findFirst.mockResolvedValue({ ...activeOrder, status: 'PAID' });
+      provider.getClientSecret.mockResolvedValue('secret');
+
+      const result = await service.create({ eventId, seatId }, user, authorization);
+
+      expect(result.order.status).toBe('PAID');
+      expect(fetchMock).not.toHaveBeenCalled();
+    });
+
+    it('свой заказ без providerIntentId (провайдер тогда не ответил) — повтор довершает: создаёт intent и сохраняет', async () => {
+      prisma.order.findFirst.mockResolvedValue({ ...activeOrder, providerIntentId: null });
+      provider.createPaymentIntent.mockResolvedValue({
+        providerIntentId: 'fake_pi_2',
+        clientSecret: 'fake_secret_2',
+      });
+      prisma.order.updateMany.mockResolvedValue({ count: 1 });
+      prisma.order.findUniqueOrThrow.mockResolvedValue({
+        ...activeOrder,
+        providerIntentId: 'fake_pi_2',
+      });
+
+      const result = await service.create({ eventId, seatId }, user, authorization);
+
+      expect(result.order.providerIntentId).toBe('fake_pi_2');
+      expect(result.clientSecret).toBe('fake_secret_2');
+      expect(prisma.order.create).not.toHaveBeenCalled();
+    });
+
+    it('двойной клик: другой запрос успел привязать intent раньше — берём его intent, а не свой', async () => {
+      prisma.order.findFirst.mockResolvedValue({ ...activeOrder, providerIntentId: null });
+      provider.createPaymentIntent.mockResolvedValue({
+        providerIntentId: 'fake_pi_loser',
+        clientSecret: 'secret_loser',
+      });
+      prisma.order.updateMany.mockResolvedValue({ count: 0 }); // условная привязка не сработала
+      prisma.order.findUniqueOrThrow.mockResolvedValue({
+        ...activeOrder,
+        providerIntentId: 'fake_pi_winner',
+      });
+      provider.getClientSecret.mockResolvedValue('secret_winner');
+
+      const result = await service.create({ eventId, seatId }, user, authorization);
+
+      expect(result.order.providerIntentId).toBe('fake_pi_winner');
+      expect(result.clientSecret).toBe('secret_winner');
+      expect(provider.getClientSecret).toHaveBeenCalledWith('fake_pi_winner');
+    });
+
+    it('заказ на это место у другого пользователя — 409 сразу, без походов в booking/catalog', async () => {
+      prisma.order.findFirst.mockResolvedValue({ ...activeOrder, userId: 'someone-else' });
+
+      await expect(service.create({ eventId, seatId }, user, authorization)).rejects.toThrow(
+        ConflictException,
+      );
+      expect(fetchMock).not.toHaveBeenCalled();
+      expect(provider.getClientSecret).not.toHaveBeenCalled();
+    });
+
+    describe('гонка: заказ появился между проверкой и вставкой (P2002)', () => {
+      const uniqueViolation = () =>
+        new Prisma.PrismaClientKnownRequestError('нарушение уникальности', {
+          code: 'P2002',
+          clientVersion: 'test',
+        });
+
+      beforeEach(() => {
+        mockHoldResponse({ seatId, expiresAt: '2026-01-01T00:05:00.000Z' });
+        mockEventResponse({ status: 'PUBLISHED', basePriceCents: 150000 });
+        prisma.order.create.mockRejectedValue(uniqueViolation());
+      });
+
+      it('заказ создал тот же пользователь (двойной клик) — возвращаем его', async () => {
+        prisma.order.findFirst.mockResolvedValueOnce(null).mockResolvedValueOnce(activeOrder);
+        provider.getClientSecret.mockResolvedValue('secret');
+
+        const result = await service.create({ eventId, seatId }, user, authorization);
+
+        expect(result.order.id).toBe('order-1');
+      });
+
+      it('заказ создал другой пользователь — 409', async () => {
+        prisma.order.findFirst
+          .mockResolvedValueOnce(null)
+          .mockResolvedValueOnce({ ...activeOrder, userId: 'someone-else' });
+
+        await expect(service.create({ eventId, seatId }, user, authorization)).rejects.toThrow(
+          ConflictException,
+        );
+      });
     });
   });
 

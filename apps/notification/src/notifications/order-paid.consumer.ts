@@ -37,6 +37,14 @@ interface CatalogSeat {
 
 const NOTIFICATION_TYPE = 'TICKET_EMAIL';
 
+// Аренда захвата: если воркер упал посреди обработки, по истечении этого
+// срока заказ можно захватить заново. Должна с запасом покрывать PDF, S3 и SMTP.
+const CLAIM_LEASE_SECONDS = 120;
+// Заказ сейчас обрабатывает другой воркер: подождать и вернуть сообщение в очередь.
+const BUSY_RETRY_DELAY_MS = 2_000;
+
+type ClaimResult = 'claimed' | 'already-sent' | 'busy';
+
 /**
  * Первый consumer RabbitMQ в проекте (payment был только publisher'ом).
  * На каждое order.paid: письмо с PDF-билетом. Успех/неуспех — ack/nack
@@ -75,14 +83,20 @@ export class OrderPaidConsumer implements OnApplicationBootstrap {
       return;
     }
 
-    const existing = await this.prisma.notificationLog.findUnique({
-      where: { orderId_type: { orderId: event.orderId, type: NOTIFICATION_TYPE } },
-    });
-    if (existing?.status === 'SENT') {
-      // Повторная доставка (redelivery после разрыва соединения до
-      // ack) уже обработанного заказа — не отправляем письмо дважды.
-      // Тот же принцип, что order.status !== 'PENDING' в payment.
+    const claim = await this.claim(event.orderId);
+    if (claim === 'already-sent') {
+      // Повторная доставка (redelivery после разрыва соединения до ack, дубль
+      // из outbox) уже обработанного заказа — письмо второй раз не отправляем.
+      orderPaidProcessedTotal.inc({ result: 'duplicate' });
       this.channel.ack(msg);
+      return;
+    }
+    if (claim === 'busy') {
+      // Этот заказ прямо сейчас обрабатывает другой воркер (или он упал и
+      // аренда ещё не истекла). Не отбрасываем сообщение: если тот воркер
+      // не закончит, именно эта копия подхватит заказ после истечения аренды.
+      await this.sleep(BUSY_RETRY_DELAY_MS);
+      this.channel.nack(msg, false, true);
       return;
     }
 
@@ -96,31 +110,58 @@ export class OrderPaidConsumer implements OnApplicationBootstrap {
       const pdfKey = await this.storage.uploadTicket(event.orderId, pdf);
       await this.mail.sendTicket({ to: email, eventTitle: ticketData.eventTitle, pdf });
 
-      await this.prisma.notificationLog.upsert({
+      await this.prisma.notificationLog.update({
         where: { orderId_type: { orderId: event.orderId, type: NOTIFICATION_TYPE } },
-        create: { orderId: event.orderId, type: NOTIFICATION_TYPE, status: 'SENT', pdfKey },
-        update: { status: 'SENT', pdfKey, errorMessage: null },
+        data: { status: 'SENT', pdfKey, errorMessage: null, claimedAt: null },
       });
       orderPaidProcessedTotal.inc({ result: 'sent' });
       this.channel.ack(msg);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       this.logger.warn(`не удалось обработать order.paid ${event.orderId}: ${message} — в DLQ`);
-      await this.prisma.notificationLog.upsert({
+      await this.prisma.notificationLog.update({
         where: { orderId_type: { orderId: event.orderId, type: NOTIFICATION_TYPE } },
-        create: {
-          orderId: event.orderId,
-          type: NOTIFICATION_TYPE,
-          status: 'FAILED',
-          errorMessage: message,
-        },
-        update: { status: 'FAILED', errorMessage: message },
+        data: { status: 'FAILED', errorMessage: message, claimedAt: null },
       });
       orderPaidProcessedTotal.inc({ result: 'failed' });
       // requeue:false — без цикла ретраев в этой версии (см. план),
       // сообщение уходит в DLQ через x-dead-letter-exchange.
       this.channel.nack(msg, false, false);
     }
+  }
+
+  /**
+   * Атомарный захват заказа одним SQL-запросом (INSERT ... ON CONFLICT DO UPDATE
+   * ... WHERE): проверка "уже отправлено" и постановка отметки "обрабатываю"
+   * не разнесены во времени, поэтому два воркера (или дубль сообщения) не могут
+   * оба решить, что заказ свободен, и отправить два письма.
+   *
+   * Захватить можно новую запись, FAILED (повтор из DLQ) и PROCESSING с
+   * истёкшей арендой (воркер упал). SENT и свежий PROCESSING не захватываются.
+   */
+  private async claim(orderId: string): Promise<ClaimResult> {
+    const rows = await this.prisma.$queryRaw<{ id: string }[]>`
+      INSERT INTO notification_logs (id, "orderId", type, status, "claimedAt", "createdAt")
+      VALUES (gen_random_uuid()::text, ${orderId}, ${NOTIFICATION_TYPE}, 'PROCESSING', now(), now())
+      ON CONFLICT ("orderId", type) DO UPDATE
+        SET status = 'PROCESSING', "claimedAt" = now(), "errorMessage" = NULL
+        WHERE notification_logs.status = 'FAILED'
+           OR (notification_logs.status = 'PROCESSING'
+               AND notification_logs."claimedAt" < now() - (${CLAIM_LEASE_SECONDS}::int * interval '1 second'))
+      RETURNING id
+    `;
+    if (rows.length > 0) {
+      return 'claimed';
+    }
+
+    const existing = await this.prisma.notificationLog.findUnique({
+      where: { orderId_type: { orderId, type: NOTIFICATION_TYPE } },
+    });
+    return existing?.status === 'SENT' ? 'already-sent' : 'busy';
+  }
+
+  private sleep(ms: number): Promise<void> {
+    return new Promise((resolve) => setTimeout(resolve, ms));
   }
 
   private async fetchUserEmail(userId: string): Promise<{ email: string }> {
