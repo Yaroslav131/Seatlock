@@ -157,7 +157,30 @@ jobs:
             # jaeger/prometheus/grafana — тем же принципом, что и
             # rabbitmq/minio выше: сервисов раньше не было в файле вообще,
             # up сам создаст контейнеры по новому описанию.
-            docker compose -f docker-compose.prod.yml up -d rabbitmq minio auth catalog booking payment notification gateway caddy jaeger prometheus grafana
+            docker compose -f docker-compose.prod.yml up -d rabbitmq minio auth catalog booking payment notification caddy jaeger prometheus grafana
+
+            # gateway обновляем по одной реплике: пока перезапускается первая, Caddy
+            # держит трафик на второй. --no-deps, чтобы compose не тронул обе разом
+            # через зависимости. Между репликами ждём, пока новая станет healthy и
+            # Caddy (проверка раз в 5 секунд) вернёт её в ротацию.
+            for svc in gateway gateway-2; do
+              docker compose -f docker-compose.prod.yml up -d --no-deps "$svc"
+              cid=$(docker compose -f docker-compose.prod.yml ps -q "$svc")
+              ready=false
+              for i in $(seq 1 20); do
+                if [ "$(docker inspect --format '{{.State.Health.Status}}' "$cid")" = "healthy" ]; then
+                  ready=true
+                  break
+                fi
+                sleep 3
+              done
+              if [ "$ready" != "true" ]; then
+                echo "ОШИБКА: $svc не стал healthy за 60 секунд, вторую реплику не трогаю"
+                docker logs "$cid" --tail 50
+                exit 1
+              fi
+              sleep 7
+            done
 
             # Бакет не создаётся сам при первом старте MinIO — идемпотентно
             # (--ignore-existing, не падает на повторных деплоях), тем же
@@ -181,7 +204,7 @@ jobs:
             # У сервисов нет опубликованных портов на хост — снаружи виден
             # только Caddy. Проверяем не curl'ом, а собственным Docker
             # HEALTHCHECK каждого контейнера.
-            for name in seatlock-auth-1 seatlock-catalog-1 seatlock-booking-1 seatlock-payment-1 seatlock-notification-1 seatlock-gateway-1; do
+            for name in seatlock-auth-1 seatlock-catalog-1 seatlock-booking-1 seatlock-payment-1 seatlock-notification-1 seatlock-gateway-1 seatlock-gateway-2-1; do
               ok=false
               for i in $(seq 1 10); do
                 status=$(docker inspect --format '{{.State.Health.Status}}' "$name")

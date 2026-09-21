@@ -31,11 +31,6 @@ export function confirmFakePayment(providerIntentId: string): Promise<{ received
   });
 }
 
-// Публично, для карты зала — тот же принцип, что и getHeldSeats в booking-api.ts.
-export function getSoldSeats(eventId: string): Promise<{ seatId: string }[]> {
-  return publicFetch<{ seatId: string }[]>(`/api/payment/events/${eventId}/sold-seats`);
-}
-
 // ORGANIZER/ADMIN — бэк сам проверяет, что событие принадлежит вызывающему.
 export function listOrders(eventId: string): Promise<Order[]> {
   return authFetch<Order[]>(`/api/payment/orders?eventId=${eventId}`);
