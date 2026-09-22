@@ -1,0 +1,39 @@
+# Автомасштабирование по CPU для gateway — единственный сервис с этим объектом в
+# первом проходе трека (учебная демонстрация, не для остальных пяти сервисов).
+# targetCPUUtilizationPercentage считается от requests.cpu в 03-gateway.yaml (50m):
+# 50% значит "в среднем 25m на под", у обычного health-запроса этого почти
+# невозможно достичь без искусственной нагрузки — это ожидаемо, порог низкий
+# специально, чтобы масштабирование было видно за секунды, а не за час нагрузочного теста.
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: gateway
+  namespace: seatlock
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: gateway
+  minReplicas: 2
+  maxReplicas: 6
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 50
+  behavior:
+    scaleUp:
+      # 0 — реагировать на первый же замер выше порога, не ждать "стабилизации":
+      # для учебной демонстрации важнее увидеть реакцию быстро, чем защититься
+      # от единичных всплесков (в проде это стоило бы обдумать отдельно).
+      stabilizationWindowSeconds: 0
+      policies:
+        - type: Pods
+          value: 2
+          periodSeconds: 15
+    scaleDown:
+      # 60 c, а не значение по умолчанию (300 c) — опять же только ради того, чтобы
+      # не ждать пять минут, наблюдая за демонстрацией.
+      stabilizationWindowSeconds: 60
