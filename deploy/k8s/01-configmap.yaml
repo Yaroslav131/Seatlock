@@ -1,0 +1,42 @@
+# Несекретная часть конфигурации, общая для сервисов. Секреты (пароли, JWT) — в
+# secret.yaml. Инфраструктура (Postgres/Redis/RabbitMQ/MinIO/Mailpit/Jaeger) намеренно
+# осталась вне кластера, на уже существующем dev-стеке (docker-compose.yml) — сервисы
+# в подах достают её через host.docker.internal, который Docker Desktop сам резолвит
+# внутри любого контейнера, включая узлы kind. Подробности и почему так — ADR 0008.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: seatlock-config
+  namespace: seatlock
+data:
+  NODE_ENV: development
+  LOG_LEVEL: debug
+
+  # Внутри кластера сервисы обращаются друг к другу по имени Service, а не по
+  # localhost/host.docker.internal — то же самое DNS-имя, что и порт в Service ниже.
+  AUTH_SERVICE_URL: http://auth:3001
+  CATALOG_SERVICE_URL: http://catalog:3002
+  BOOKING_SERVICE_URL: http://booking:3003
+  PAYMENT_SERVICE_URL: http://payment:3004
+
+  GATEWAY_PORT: '3000'
+  AUTH_PORT: '3001'
+  CATALOG_PORT: '3002'
+  BOOKING_PORT: '3003'
+  PAYMENT_PORT: '3004'
+  NOTIFICATION_PORT: '3005'
+
+  # Ingress-nginx — единственный прокси перед gateway (как Caddy в проде), поэтому 1.
+  TRUST_PROXY_HOPS: '1'
+  CORS_ORIGIN: http://localhost:5173
+
+  PAYMENT_PROVIDER: fake
+  SEAT_HOLD_TTL_SECONDS: '300'
+
+  S3_ENDPOINT: http://host.docker.internal:9100
+  S3_BUCKET: seatlock-tickets
+
+  SMTP_HOST: host.docker.internal
+  SMTP_PORT: '1026'
+
+  OTEL_EXPORTER_OTLP_ENDPOINT: http://host.docker.internal:4318

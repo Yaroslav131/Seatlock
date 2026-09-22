@@ -151,6 +151,8 @@ apps/
   web/         React-фронтенд (Vite)
 packages/
   e2e/         Playwright — сценарии поверх уже поднятого стека
+  load-test/   k6-сценарии нагрузочного тестирования
+deploy/k8s/    локальный кластер kind — учебный трек по Kubernetes, не прод (ADR 0008)
 docs/adr/      архитектурные решения и их причины
 docker-compose.yml       локальная инфраструктура для разработки
 docker-compose.prod.yml  боевой стек (запускается на сервере)
