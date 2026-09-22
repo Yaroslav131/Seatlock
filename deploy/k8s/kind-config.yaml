@@ -1,0 +1,30 @@
+# Конфигурация локального кластера kind (Kubernetes IN Docker) для эксперимента с
+# балансировкой и автомасштабированием — не для прода, прод остаётся на
+# docker-compose.prod.yml (см. docs/adr/0008-kind-local-kubernetes.md).
+#
+# Один узел выступает и control-plane, и worker — для обучения балансировке
+# внутри одного узла достаточно: Service и так распределяет запросы между подами
+# одного узла через iptables/IPVS, отдельный worker для этого не нужен.
+#
+# extraPortMappings пробрасывают порты с узла kind наружу на хост, на нестандартные
+# 18080/18443, чтобы не конфликтовать с портом 80, который на Windows часто занят
+# (IIS, службы "World Wide Web Publishing", Skype и т. п.) и с портами 3000-3006,
+# занятыми dev-стеком (docker-compose.yml) и локальным `pnpm dev`.
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+name: seatlock
+nodes:
+  - role: control-plane
+    kubeadmConfigPatches:
+      - |
+        kind: InitConfiguration
+        nodeRegistration:
+          kubeletExtraArgs:
+            node-labels: "ingress-ready=true"
+    extraPortMappings:
+      - containerPort: 80
+        hostPort: 18080
+        protocol: TCP
+      - containerPort: 443
+        hostPort: 18443
+        protocol: TCP
