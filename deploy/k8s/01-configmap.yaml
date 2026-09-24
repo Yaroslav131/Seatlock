@@ -46,3 +46,6 @@ data:
   SMTP_PORT: '1026'
 
   OTEL_EXPORTER_OTLP_ENDPOINT: http://host.docker.internal:4318
+  # 10% трейсов, как в проде: решение принимает начавший трейс (gateway), остальные повторяют.
+  OTEL_TRACES_SAMPLER: parentbased_traceidratio
+  OTEL_TRACES_SAMPLER_ARG: '0.1'

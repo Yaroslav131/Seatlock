@@ -69,6 +69,10 @@ services:
       # localhost/host.docker.internal, как в dev (там сервисы — голые
       # процессы на хосте, см. docker/prometheus.yml).
       OTEL_EXPORTER_OTLP_ENDPOINT: http://jaeger:4318
+      # Пишем 10% трейсов, а не все: Jaeger хранит их в памяти сервера. Решение принимает тот,
+      # кто начал трейс (gateway), остальные сервисы его повторяют, поэтому трейс не рвётся.
+      OTEL_TRACES_SAMPLER: parentbased_traceidratio
+      OTEL_TRACES_SAMPLER_ARG: '0.1'
     # Порт наружу не публикуем — снаружи виден только gateway,
     # он и проксирует /api/auth сюда по имени сервиса.
 
@@ -90,6 +94,8 @@ services:
       REDIS_URL: redis://redis:6379
       JWT_ACCESS_SECRET: ${JWT_ACCESS_SECRET}
       OTEL_EXPORTER_OTLP_ENDPOINT: http://jaeger:4318
+      OTEL_TRACES_SAMPLER: parentbased_traceidratio
+      OTEL_TRACES_SAMPLER_ARG: '0.1'
     # Порт наружу не публикуем — снаружи виден только gateway.
 
   booking:
@@ -109,6 +115,8 @@ services:
       JWT_ACCESS_SECRET: ${JWT_ACCESS_SECRET}
       SEAT_HOLD_TTL_SECONDS: 300
       OTEL_EXPORTER_OTLP_ENDPOINT: http://jaeger:4318
+      OTEL_TRACES_SAMPLER: parentbased_traceidratio
+      OTEL_TRACES_SAMPLER_ARG: '0.1'
     # Порт наружу не публикуем — снаружи виден только gateway.
 
   payment:
@@ -142,6 +150,8 @@ services:
       STRIPE_SECRET_KEY: ${STRIPE_SECRET_KEY:-}
       STRIPE_WEBHOOK_SECRET: ${STRIPE_WEBHOOK_SECRET:-}
       OTEL_EXPORTER_OTLP_ENDPOINT: http://jaeger:4318
+      OTEL_TRACES_SAMPLER: parentbased_traceidratio
+      OTEL_TRACES_SAMPLER_ARG: '0.1'
     # Порт наружу не публикуем — снаружи виден только gateway, он же
     # проксирует и вебхук провайдера (сырые байты, см. apps/gateway/src/main.ts).
 
@@ -206,6 +216,8 @@ services:
       # Потолок — лимит Resend, 10 запросов/с на команду, см. docs/adr/0006.
       NOTIFICATION_PREFETCH: 3
       OTEL_EXPORTER_OTLP_ENDPOINT: http://jaeger:4318
+      OTEL_TRACES_SAMPLER: parentbased_traceidratio
+      OTEL_TRACES_SAMPLER_ARG: '0.1'
     # Порт наружу не публикуем — как и payment, у notification нет
     # публичного HTTP API, gateway его не проксирует.
 
@@ -252,6 +264,8 @@ services:
       JWT_ACCESS_SECRET: ${JWT_ACCESS_SECRET}
       JWT_REFRESH_SECRET: ${JWT_REFRESH_SECRET}
       OTEL_EXPORTER_OTLP_ENDPOINT: http://jaeger:4318
+      OTEL_TRACES_SAMPLER: parentbased_traceidratio
+      OTEL_TRACES_SAMPLER_ARG: '0.1'
       # Перед gateway стоит один прокси (Caddy): по нему определяется IP клиента для
       # лимита частоты. Если поставить ещё один слой (CDN, балансировщик), число надо увеличить.
       TRUST_PROXY_HOPS: 1
@@ -286,10 +300,19 @@ services:
     # трафик туда, где никто не отвечает.
 
   jaeger:
-    image: jaegertracing/all-in-one:latest
+    # Версия зафиксирована (это та, что уже работала на сервере): у latest v1 объявлен
+    # устаревшим, а v2 настраивается совсем иначе, обновление не должно происходить само.
+    image: jaegertracing/all-in-one:1.76.0
     restart: unless-stopped
+    # Трейсы лежат в памяти и раньше не были ограничены вовсе (MaxTraces: 0): контейнер
+    # дорос до 546 МБ на сервере с 3,9 ГБ, а один тяжёлый запрос к нему положил всю машину.
+    # Теперь: не больше 1500 трейсов (~10-20 КБ каждый в JSON, в памяти в несколько раз
+    # больше), мягкий предел для сборщика мусора Go и жёсткий предел контейнера.
+    mem_limit: 256m
     environment:
       COLLECTOR_OTLP_ENABLED: 'true'
+      MEMORY_MAX_TRACES: '1500'
+      GOMEMLIMIT: 200MiB
     ports:
       # Только на loopback самого сервера — снаружи недоступно вообще,
       # смотреть через `ssh -L 16686:localhost:16686 deploy@<host>`.
@@ -302,6 +325,12 @@ services:
   prometheus:
     image: prom/prometheus:latest
     restart: unless-stopped
+    # Хранение ограничено и по сроку, и по размеру: диск на сервере один и общий с базой.
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--storage.tsdb.retention.time=15d'
+      - '--storage.tsdb.retention.size=1GB'
     volumes:
       - ./docker/prometheus.prod.yml:/etc/prometheus/prometheus.yml:ro
       - prometheusdata:/prometheus
@@ -310,6 +339,54 @@ services:
     # Никакого --web.enable-remote-write-receiver, как в dev — нагрузочные
     # тесты на прод не гоняем (см. packages/load-test/README.md), приём
     # remote_write снаружи здесь просто не нужен.
+
+  # Метрики самой машины, контейнеров и базы (ADR 0010). Наружу порты не публикуются: их
+  # забирает только Prometheus по внутренней сети. Отдельным шагом деплоя и с лимитами
+  # памяти: сбой мониторинга не должен блокировать выкладку приложения.
+  node-exporter:
+    image: prom/node-exporter:v1.9.1
+    restart: unless-stopped
+    mem_limit: 64m
+    pid: host
+    command:
+      - '--path.rootfs=/host'
+    volumes:
+      - /:/host:ro
+
+  cadvisor:
+    # Версия не ниже 0.60: у старых (до 0.5x включительно) на Docker 29 с хранилищем образов
+    # containerd метрики по контейнерам не собирались вовсе, был виден только корневой cgroup.
+    image: ghcr.io/google/cadvisor:v0.60.6
+    restart: unless-stopped
+    mem_limit: 128m
+    privileged: true
+    command:
+      - '--housekeeping_interval=15s'
+      - '--docker_only=true'
+      # Только имя сервиса compose из меток: остальные метки контейнеров раздули бы число рядов.
+      - '--store_container_labels=false'
+      - '--whitelisted_container_labels=com.docker.compose.service'
+      - '--disable_metrics=disk,diskIO,network,tcp,udp,percpu,sched,process,hugetlb,referenced_memory,cpu_topology,resctrl'
+    volumes:
+      - /:/rootfs:ro
+      - /var/run:/var/run:ro
+      - /sys:/sys:ro
+      - /var/lib/docker/:/var/lib/docker:ro
+
+  postgres-exporter:
+    image: quay.io/prometheuscommunity/postgres-exporter:v0.17.1
+    restart: unless-stopped
+    mem_limit: 64m
+    # Те же учётные данные, что у всех сервисов (ADR 0001: один пользователь, схема на сервис),
+    # поэтому нового доступа это не открывает. Пароль отдельной переменной, а не в адресе:
+    # спецсимволы в нём не пришлось бы кодировать.
+    environment:
+      DATA_SOURCE_USER: seatlock
+      DATA_SOURCE_PASS: ${POSTGRES_PASSWORD}
+      DATA_SOURCE_URI: postgres:5432/seatlock?sslmode=disable
+    depends_on:
+      postgres:
+        condition: service_healthy
 
   grafana:
     image: grafana/grafana:latest
