@@ -1,0 +1,43 @@
+# Единственная точка входа снаружи кластера — ровно то же место в архитектуре, что у
+# Caddy в проде (@backend path /api/* /health /health/ready, см. Caddyfile): всё уходит
+# на gateway, а какой сервис реально отвечает, решает уже он сам (proxy/routes.ts).
+# Фронтенд (apps/web) в этот кластер не разворачивается — это чисто бэкенд-эксперимент
+# с балансировкой/автомасштабированием, см. ADR 0008.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: gateway
+  namespace: seatlock
+  annotations:
+    # 15 с (UPSTREAM_TIMEOUT_MS по умолчанию) — с запасом внутри дефолтных 60 с nginx,
+    # но возврат денег и вебхуки у gateway намеренно без таймаута (ADR 0007) — держим
+    # запас и здесь, чтобы Ingress не обрубил их первым.
+    nginx.ingress.kubernetes.io/proxy-read-timeout: '120'
+    nginx.ingress.kubernetes.io/proxy-send-timeout: '120'
+spec:
+  ingressClassName: nginx
+  rules:
+    - host: seatlock.local
+      http:
+        paths:
+          - path: /api
+            pathType: Prefix
+            backend:
+              service:
+                name: gateway
+                port:
+                  number: 3000
+          - path: /health
+            pathType: Exact
+            backend:
+              service:
+                name: gateway
+                port:
+                  number: 3000
+          - path: /health/ready
+            pathType: Exact
+            backend:
+              service:
+                name: gateway
+                port:
+                  number: 3000
