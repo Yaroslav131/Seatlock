@@ -122,13 +122,21 @@ jobs:
       # --network host, а не -p 9100:9000: сервис-контейнеры выше и
       # обычные "docker run" в раннере GitHub Actions уже в сети host,
       # публиковать порт заново незачем и было бы конфликтом.
+      #
+      # Образ bitnamilegacy/minio, а не quay.io/minio/minio: MinIO убрал свои
+      # официальные образы (и quay.io, и Docker Hub, тег latest и все RELEASE-теги
+      # отвечают "no such manifest"), после чего этот шаг стал падать на pull. Здесь
+      # тот же сервер MinIO (2025-07-23, последняя архивная сборка Bitnami), для
+      # тестов хранилища этого достаточно. Версия зафиксирована намеренно: образ больше
+      # не обновляется. mc лежит внутри образа, отдельный клиент не нужен.
       - name: Поднять MinIO и создать бакет
         run: |
           docker run -d --name minio --network host \
             -e MINIO_ROOT_USER=seatlock -e MINIO_ROOT_PASSWORD=seatlock123 \
-            quay.io/minio/minio:latest server /data --address :9100
+            -e MINIO_API_PORT_NUMBER=9100 \
+            bitnamilegacy/minio:2025.7.23-debian-12-r5
           curl --retry 20 --retry-delay 2 --retry-connrefused -sf http://localhost:9100/minio/health/live
-          docker run --rm --network host --entrypoint sh quay.io/minio/minio:latest -c \
+          docker run --rm --network host --entrypoint sh bitnamilegacy/minio:2025.7.23-debian-12-r5 -c \
             "mc alias set local http://localhost:9100 seatlock seatlock123 && mc mb -p local/seatlock-tickets"
 
       # Отдельным шагом, до pnpm test — иначе auth.integration.spec.ts/
