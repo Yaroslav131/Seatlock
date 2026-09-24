@@ -28,6 +28,12 @@ data:
 
   # Ingress-nginx — единственный прокси перед gateway (как Caddy в проде), поэтому 1.
   TRUST_PROXY_HOPS: '1'
+
+  # Пул соединений Prisma на один под. Бюджет Postgres (max_connections = 100): четыре
+  # сервиса с базой × 2 реплики × 5 = 40, плюс gateway (по 2 соединения на реплику, до 6
+  # реплик под HPA) = 12, всего до 52 из 100. Без этой настройки Prisma берёт cpu*2+1 от
+  # ядер хозяйской машины, и поды на большом узле открывают десятки соединений каждый.
+  DB_POOL_SIZE: '5'
   CORS_ORIGIN: http://localhost:5173
 
   PAYMENT_PROVIDER: fake

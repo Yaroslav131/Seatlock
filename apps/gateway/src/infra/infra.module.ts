@@ -22,7 +22,11 @@ import { POSTGRES_POOL, REDIS_CLIENT } from './tokens';
           // getOrThrow, а не get: если DATABASE_URL забыли — сервис
           // должен упасть на старте, а не через час на первом запросе.
           connectionString: config.getOrThrow<string>('DATABASE_URL'),
-          max: 10,
+          // Базу gateway использует только для проверки готовности (SELECT 1), поэтому
+          // больше пары соединений ему не нужно. Было 10, а реплик gateway бывает много
+          // (две в проде, до шести под HPA в Kubernetes), и лишние соединения отбирались
+          // бы у сервисов, которые реально работают с данными.
+          max: 2,
           connectionTimeoutMillis: 3_000,
         }),
     },
