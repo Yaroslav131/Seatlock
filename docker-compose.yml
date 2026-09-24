@@ -109,6 +109,49 @@ services:
     extra_hosts:
       - 'host.docker.internal:host-gateway'
 
+  # Метрики самой машины и базы (этап 5). Node-экспортёр и cAdvisor в dev на Docker
+  # Desktop показывают виртуальную машину Docker, а не ваш Windows/Mac, зато дашборд
+  # «сервер и база» можно отладить локально до выката на прод.
+  node-exporter:
+    image: prom/node-exporter:v1.9.1
+    container_name: seatlock-node-exporter
+    restart: unless-stopped
+    pid: host
+    command:
+      - '--path.rootfs=/host'
+    volumes:
+      - /:/host:ro
+
+  cadvisor:
+    image: ghcr.io/google/cadvisor:v0.60.6
+    container_name: seatlock-cadvisor
+    restart: unless-stopped
+    privileged: true
+    command:
+      - '--housekeeping_interval=15s'
+      - '--docker_only=true'
+      - '--store_container_labels=false'
+      - '--whitelisted_container_labels=com.docker.compose.service'
+      - '--disable_metrics=disk,diskIO,network,tcp,udp,percpu,sched,process,hugetlb,referenced_memory,cpu_topology,resctrl'
+    volumes:
+      - /:/rootfs:ro
+      - /var/run:/var/run:ro
+      - /sys:/sys:ro
+      - /var/lib/docker/:/var/lib/docker:ro
+
+  postgres-exporter:
+    image: quay.io/prometheuscommunity/postgres-exporter:v0.17.1
+    container_name: seatlock-postgres-exporter
+    restart: unless-stopped
+    environment:
+      # Так же, как в проде (docker-compose.prod.yml): пароль отдельной переменной.
+      DATA_SOURCE_USER: seatlock
+      DATA_SOURCE_PASS: seatlock
+      DATA_SOURCE_URI: postgres:5432/seatlock?sslmode=disable
+    depends_on:
+      postgres:
+        condition: service_healthy
+
   grafana:
     image: grafana/grafana:latest
     container_name: seatlock-grafana

@@ -168,6 +168,20 @@ jobs:
               docker compose -f docker-compose.prod.yml up -d --force-recreate --no-deps caddy
             fi
 
+            # Мониторинг (экспортёры метрик машины, контейнеров и базы) отдельным шагом и
+            # без остановки деплоя при сбое: если экспортёр не встал, это предупреждение,
+            # а не повод оставить приложение недовыкаченным (gateway ниже ещё не обновлён).
+            docker compose -f docker-compose.prod.yml up -d node-exporter cadvisor postgres-exporter \
+              || echo "ПРЕДУПРЕЖДЕНИЕ: экспортёры метрик не запустились, деплой приложения продолжается"
+
+            # То же, что для Caddy выше: prometheus.prod.yml смонтирован одним файлом, и после
+            # git checkout контейнер видит старую версию, поэтому новые источники метрик не
+            # подхватились бы. Пересоздаём Prometheus, только если файл действительно разошёлся.
+            if ! docker exec -i seatlock-prometheus-1 cmp -s /etc/prometheus/prometheus.yml - < docker/prometheus.prod.yml; then
+              echo "prometheus.prod.yml изменился, пересоздаю prometheus"
+              docker compose -f docker-compose.prod.yml up -d --force-recreate --no-deps prometheus
+            fi
+
             # gateway обновляем по одной реплике: пока перезапускается первая, Caddy
             # держит трафик на второй. --no-deps, чтобы compose не тронул обе разом
             # через зависимости. Между репликами ждём, пока новая станет healthy и

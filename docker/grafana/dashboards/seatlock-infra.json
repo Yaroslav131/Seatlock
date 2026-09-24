@@ -1,0 +1,518 @@
+{
+  "uid": "seatlock-infra",
+  "title": "SeatLock — сервер и база",
+  "tags": ["seatlock", "infra"],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "30s",
+  "time": {
+    "from": "now-3h",
+    "to": "now"
+  },
+  "panels": [
+    {
+      "id": 1,
+      "title": "CPU занято, %",
+      "description": "Доля времени, когда ядра заняты работой. Постоянно около 100% значит, что процессору не хватает.",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 0,
+        "y": 0
+      },
+      "targets": [
+        {
+          "expr": "100 * (1 - avg(rate(node_cpu_seconds_total{mode=\"idle\"}[1m])))",
+          "legendFormat": "занято",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "min": 0,
+          "max": 100
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 2,
+      "title": "Load average",
+      "description": "Среднее число процессов, которые работают или ждут очереди на процессор (за 1, 5, 15 минут). Норма: не больше числа ядер (на проде их 2).",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 8,
+        "y": 0
+      },
+      "targets": [
+        {
+          "expr": "node_load1",
+          "legendFormat": "1 мин",
+          "refId": "A"
+        },
+        {
+          "expr": "node_load5",
+          "legendFormat": "5 мин",
+          "refId": "B"
+        },
+        {
+          "expr": "node_load15",
+          "legendFormat": "15 мин",
+          "refId": "C"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 3,
+      "title": "Ожидание CPU (PSI), % времени",
+      "description": "Какую долю времени хотя бы один процесс стоял в очереди на процессор. Точнее load average: показывает реальную нехватку, а не просто число процессов.",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 0
+      },
+      "targets": [
+        {
+          "expr": "100 * rate(node_pressure_cpu_waiting_seconds_total[1m])",
+          "legendFormat": "ждут CPU",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "min": 0
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 4,
+      "title": "Память: занято и доступно",
+      "description": "Занято = всего минус доступно. Доступная память включает кеш файлов, который система отдаёт по первому требованию. Когда «доступно» уходит почти в ноль, сервер начинает тормозить.",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 0,
+        "y": 8
+      },
+      "targets": [
+        {
+          "expr": "node_memory_MemTotal_bytes - node_memory_MemAvailable_bytes",
+          "legendFormat": "занято",
+          "refId": "A"
+        },
+        {
+          "expr": "node_memory_MemAvailable_bytes",
+          "legendFormat": "доступно",
+          "refId": "B"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes",
+          "min": 0
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 5,
+      "title": "Ожидание памяти (PSI), % времени",
+      "description": "Доля времени, когда процессы стояли и ждали, пока система освободит память. Значения выше нуля означают, что памяти не хватает.",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 8,
+        "y": 8
+      },
+      "targets": [
+        {
+          "expr": "100 * rate(node_pressure_memory_waiting_seconds_total[1m])",
+          "legendFormat": "ждут память",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "min": 0
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 6,
+      "title": "Процессы: работают и заблокированы",
+      "description": "Как колонки r и b в vmstat: сколько процессов готовы работать (в очереди на CPU) и сколько заблокированы на вводе-выводе.",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 8
+      },
+      "targets": [
+        {
+          "expr": "node_procs_running",
+          "legendFormat": "готовы к запуску (r)",
+          "refId": "A"
+        },
+        {
+          "expr": "node_procs_blocked",
+          "legendFormat": "заблокированы (b)",
+          "refId": "B"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 7,
+      "title": "Переключения контекста в секунду",
+      "description": "Сколько раз в секунду процессор переключается между процессами. Резкий рост при тех же запросах говорит о том, что процессы мешают друг другу.",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 0,
+        "y": 16
+      },
+      "targets": [
+        {
+          "expr": "rate(node_context_switches_total[1m])",
+          "legendFormat": "переключений/с",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops"
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 8,
+      "title": "Диск: занято, %",
+      "description": "Заполнение дисков (по устройствам). Когда диск полон, база и очередь сообщений перестают писать.",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 8,
+        "y": 16
+      },
+      "targets": [
+        {
+          "expr": "100 * max by (device) (1 - node_filesystem_avail_bytes{fstype=~\"ext4|xfs|btrfs\"} / node_filesystem_size_bytes{fstype=~\"ext4|xfs|btrfs\"})",
+          "legendFormat": "{{device}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "min": 0,
+          "max": 100
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 9,
+      "title": "Сбор метрик (1 = работает)",
+      "description": "Отвечают ли на запросы Prometheus сама машина, контейнеры и база. 0 значит, что этих данных на дашборде нет.",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 16
+      },
+      "targets": [
+        {
+          "expr": "up{job=~\"node|cadvisor|postgres\"}",
+          "legendFormat": "{{job}}",
+          "refId": "A"
+        },
+        {
+          "expr": "pg_up",
+          "legendFormat": "postgres (доступ к базе)",
+          "refId": "B"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0,
+          "max": 1
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 10,
+      "title": "CPU по контейнерам, ядер",
+      "description": "Сколько ядер процессора использует каждый контейнер. Сумма не может превышать число ядер сервера.",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 0,
+        "y": 24
+      },
+      "targets": [
+        {
+          "expr": "sum by (container_label_com_docker_compose_service) (rate(container_cpu_usage_seconds_total{container_label_com_docker_compose_service!=\"\"}[1m]))",
+          "legendFormat": "{{container_label_com_docker_compose_service}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 11,
+      "title": "Память по контейнерам",
+      "description": "Сколько памяти держит каждый контейнер (рабочий набор). Нужно, чтобы вовремя заметить того, кто растёт без остановки.",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 8,
+        "y": 24
+      },
+      "targets": [
+        {
+          "expr": "sum by (container_label_com_docker_compose_service) (container_memory_working_set_bytes{container_label_com_docker_compose_service!=\"\"})",
+          "legendFormat": "{{container_label_com_docker_compose_service}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes",
+          "min": 0
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 12,
+      "title": "Убийства по памяти (OOM) за час",
+      "description": "Сколько раз система убивала контейнер из-за нехватки памяти. Любое значение выше нуля это авария.",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 24
+      },
+      "targets": [
+        {
+          "expr": "sum by (container_label_com_docker_compose_service) (increase(container_oom_events_total{container_label_com_docker_compose_service!=\"\"}[1h]))",
+          "legendFormat": "{{container_label_com_docker_compose_service}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 13,
+      "title": "Соединения с базой",
+      "description": "Соединения к Postgres по состояниям и лимит max_connections. Если линия «занято» упирается в лимит, новые запросы получат отказ.",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 0,
+        "y": 32
+      },
+      "targets": [
+        {
+          "expr": "sum by (state) (pg_stat_activity_count{datname=\"seatlock\"})",
+          "legendFormat": "{{state}}",
+          "refId": "A"
+        },
+        {
+          "expr": "pg_settings_max_connections",
+          "legendFormat": "лимит",
+          "refId": "B"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 14,
+      "title": "Транзакции в секунду",
+      "description": "Сколько транзакций база успешно завершает и откатывает. Откаты нормальны в небольшом количестве, рост говорит об ошибках.",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 8,
+        "y": 32
+      },
+      "targets": [
+        {
+          "expr": "rate(pg_stat_database_xact_commit{datname=\"seatlock\"}[1m])",
+          "legendFormat": "успешные",
+          "refId": "A"
+        },
+        {
+          "expr": "rate(pg_stat_database_xact_rollback{datname=\"seatlock\"}[1m])",
+          "legendFormat": "откаты",
+          "refId": "B"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops"
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 15,
+      "title": "Попадания в кеш базы, %",
+      "description": "Какая доля чтений берётся из памяти, а не с диска. Хорошо: выше 99%. Ниже значит, что базе не хватает памяти под рабочие данные.",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 32
+      },
+      "targets": [
+        {
+          "expr": "100 * rate(pg_stat_database_blks_hit{datname=\"seatlock\"}[5m]) / (rate(pg_stat_database_blks_hit{datname=\"seatlock\"}[5m]) + rate(pg_stat_database_blks_read{datname=\"seatlock\"}[5m]))",
+          "legendFormat": "попадания",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "min": 0,
+          "max": 100
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 16,
+      "title": "Самая долгая транзакция, с",
+      "description": "Сколько секунд самая старая открытая транзакция висит в базе. Долгие транзакции держат блокировки и мешают очистке таблиц.",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 0,
+        "y": 40
+      },
+      "targets": [
+        {
+          "expr": "max by (state) (pg_stat_activity_max_tx_duration{datname=\"seatlock\"})",
+          "legendFormat": "{{state}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "min": 0
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 17,
+      "title": "Дедлоки в секунду",
+      "description": "Взаимные блокировки, которые база разрешила, отменив одну из транзакций. В норме график пуст.",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 8,
+        "y": 40
+      },
+      "targets": [
+        {
+          "expr": "rate(pg_stat_database_deadlocks{datname=\"seatlock\"}[5m])",
+          "legendFormat": "дедлоки",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "min": 0
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 18,
+      "title": "Размер базы",
+      "description": "Сколько места занимает база seatlock на диске.",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 40
+      },
+      "targets": [
+        {
+          "expr": "pg_database_size_bytes{datname=\"seatlock\"}",
+          "legendFormat": "seatlock",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes",
+          "min": 0
+        },
+        "overrides": []
+      }
+    }
+  ]
+}
